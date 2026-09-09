@@ -1,5 +1,11 @@
 import "./App.css";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  deleteInspectionFromDB,
+  loadInspections,
+  openFieldOpsDB,
+  saveInspection,
+} from "./db";
 
 type InspectionStatus = "draft" | "completed";
 
@@ -40,63 +46,91 @@ function InspectionCard({
 }
 
 function App() {
-  const [inspections, setInspections] = useState<Inspection[]>([
-    {
-      id: "1",
-      title: "Equipment inspection",
-      status: "draft",
-    },
-    {
-      id: "2",
-      title: "Safety inspection",
-      status: "completed",
-    },
-    {
-      id: "3",
-      title: "Pump maintenance",
-      status: "draft",
-    },
-  ]);
+  const [inspections, setInspections] = useState<Inspection[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | InspectionStatus>(
     "all",
   );
-  function toggleInspectionStatus(id: string) {
-    setInspections((prevInspections) =>
-      prevInspections.map((item) =>
-        item.id === id
-          ? {
-              ...item,
-              status: item.status === "draft" ? "completed" : "draft",
-            }
-          : item,
-      ),
-    );
+  useEffect(() => {
+    async function initDB() {
+      try {
+        const db = await openFieldOpsDB();
+
+        console.log("FieldOps DB opened:", db.name);
+
+        const storedInspections = await loadInspections();
+
+        setInspections(storedInspections);
+      } catch (error) {
+        console.error("Failed to initialize FieldOps DB:", error);
+      }
+    }
+
+    initDB();
+  }, []);
+  async function toggleInspectionStatus(id: string) {
+    const inspection = inspections.find((item) => item.id === id);
+
+    if (!inspection) {
+      return;
+    }
+
+    const updatedInspection: Inspection = {
+      ...inspection,
+      status: inspection.status === "draft" ? "completed" : "draft",
+    };
+
+    try {
+      await saveInspection(updatedInspection);
+
+      setInspections((prevInspections) =>
+        prevInspections.map((item) =>
+          item.id === id ? updatedInspection : item,
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to update inspection:", error);
+    }
   }
 
-  function addInspection() {
+  async function addInspection() {
     if (!newTitle.trim()) {
       return;
     }
+
     const newInspection: Inspection = {
       id: crypto.randomUUID(),
       title: newTitle,
       status: "draft",
     };
 
-    setInspections((prevInspections) => [...prevInspections, newInspection]);
-    setNewTitle("");
+    try {
+      await saveInspection(newInspection);
+
+      setInspections((prevInspections) => [...prevInspections, newInspection]);
+
+      setNewTitle("");
+    } catch (error) {
+      console.error("Failed to save inspection:", error);
+    }
   }
 
-  function deleteInspection(id: string) {
-    setInspections((prevInspections) =>
-      prevInspections.filter((item) => item.id !== id),
-    );
+  async function deleteInspection(id: string) {
+    try {
+      await deleteInspectionFromDB(id);
+
+      setInspections((prevInspections) =>
+        prevInspections.filter((item) => item.id !== id),
+      );
+    } catch (error) {
+      console.error("Failed to delete inspection:", error);
+    }
   }
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    addInspection();
+
+    await addInspection();
   }
 
   function handleTitleChange(event: React.ChangeEvent<HTMLInputElement>) {

@@ -1,10 +1,11 @@
 import "./App.css";
 import { useEffect, useState } from "react";
 import {
-  deleteInspectionFromDB,
+  deleteInspectionWithSync,
   loadInspections,
+  loadSyncQueue,
   openFieldOpsDB,
-  saveInspection,
+  saveInspectionWithSync,
 } from "./db";
 
 type InspectionStatus = "draft" | "completed";
@@ -51,6 +52,9 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<"all" | InspectionStatus>(
     "all",
   );
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
   useEffect(() => {
     async function initDB() {
       try {
@@ -61,12 +65,36 @@ function App() {
         const storedInspections = await loadInspections();
 
         setInspections(storedInspections);
+        const syncQueue = await loadSyncQueue();
+
+        setPendingSyncCount(syncQueue.length);
       } catch (error) {
         console.error("Failed to initialize FieldOps DB:", error);
       }
     }
 
     initDB();
+  }, []);
+  useEffect(() => {
+    async function handleOnline() {
+      setIsOnline(true);
+
+      const syncQueue = await loadSyncQueue();
+
+      console.log("Connection restored. Pending sync:", syncQueue);
+    }
+
+    function handleOffline() {
+      setIsOnline(false);
+    }
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
   }, []);
   async function toggleInspectionStatus(id: string) {
     const inspection = inspections.find((item) => item.id === id);
@@ -81,7 +109,8 @@ function App() {
     };
 
     try {
-      await saveInspection(updatedInspection);
+      await saveInspectionWithSync(updatedInspection, "UPDATE");
+      await refreshPendingSyncCount();
 
       setInspections((prevInspections) =>
         prevInspections.map((item) =>
@@ -105,7 +134,8 @@ function App() {
     };
 
     try {
-      await saveInspection(newInspection);
+      await saveInspectionWithSync(newInspection, "CREATE");
+      await refreshPendingSyncCount();
 
       setInspections((prevInspections) => [...prevInspections, newInspection]);
 
@@ -117,7 +147,8 @@ function App() {
 
   async function deleteInspection(id: string) {
     try {
-      await deleteInspectionFromDB(id);
+      await deleteInspectionWithSync(id);
+      await refreshPendingSyncCount();
 
       setInspections((prevInspections) =>
         prevInspections.filter((item) => item.id !== id),
@@ -150,6 +181,11 @@ function App() {
       ? inspections
       : inspections.filter((inspection) => inspection.status === statusFilter);
 
+  async function refreshPendingSyncCount() {
+    const syncQueue = await loadSyncQueue();
+    setPendingSyncCount(syncQueue.length);
+  }
+
   return (
     <main>
       <h1>FieldOps Offline</h1>
@@ -167,6 +203,8 @@ function App() {
         Completed: {completedCount} / {inspections.length}
       </p>
       <p>Draft: {draftCount}</p>
+      <p>Pending sync: {pendingSyncCount}</p>
+      <p>Connection: {isOnline ? "Online" : "Offline"}</p>
       <form onSubmit={handleSubmit}>
         <input
           value={newTitle}

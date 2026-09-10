@@ -1,5 +1,6 @@
 import "./App.css";
 import { useEffect, useState } from "react";
+import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
   loadInspections,
@@ -53,7 +54,7 @@ function App() {
     "all",
   );
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const isOnline = useOnlineStatus();
 
   useEffect(() => {
     async function initDB() {
@@ -77,23 +78,15 @@ function App() {
   }, []);
   useEffect(() => {
     async function handleOnline() {
-      setIsOnline(true);
-
       const syncQueue = await loadSyncQueue();
 
       console.log("Connection restored. Pending sync:", syncQueue);
     }
 
-    function handleOffline() {
-      setIsOnline(false);
-    }
-
     window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
 
     return () => {
       window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
     };
   }, []);
   async function toggleInspectionStatus(id: string) {

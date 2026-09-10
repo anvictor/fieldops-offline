@@ -77,6 +77,11 @@ function App() {
     initDB();
   }, []);
   useEffect(() => {
+    if (import.meta.env.DEV) {
+      console.log("development mode, StrictMode may re-run effects");
+    } else {
+      console.log("prod mode");
+    }
     async function handleOnline() {
       const syncQueue = await loadSyncQueue();
 

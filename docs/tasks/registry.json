@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "tasks": [
+    {
+      "id": "TASK-001",
+      "status": "done",
+      "spec": "docs/tasks/001-pr-ci-validation.md",
+      "branch": "codex/001-pr-ci-validation",
+      "pr": 1
+    },
+    {
+      "id": "TASK-002",
+      "status": "in_review",
+      "spec": "docs/tasks/002-task-registry.md",
+      "branch": "codex/002-task-registry",
+      "pr": 2
+    }
+  ]
+}

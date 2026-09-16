@@ -10,7 +10,7 @@
     },
     {
       "id": "TASK-002",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/002-task-registry.md",
       "branch": "codex/002-task-registry",
       "pr": 2

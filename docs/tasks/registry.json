@@ -17,10 +17,10 @@
     },
     {
       "id": "TASK-003",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/003-shared-online-status.md",
       "branch": "codex/003-shared-online-status",
-      "pr": null
+      "pr": 4
     }
   ]
 }

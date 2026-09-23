@@ -1,25 +1,12 @@
-import { useEffect, useState } from "react";
+import { useContext } from "react";
+import { OnlineStatusContext } from "../contexts/OnlineStatusContext";
 
 export function useOnlineStatus(): boolean {
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const isOnline = useContext(OnlineStatusContext);
 
-  useEffect(() => {
-    function handleOnline() {
-      setIsOnline(true);
-    }
-
-    function handleOffline() {
-      setIsOnline(false);
-    }
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
+  if (isOnline === undefined) {
+    throw new Error("useOnlineStatus must be used within an OnlineStatusProvider");
+  }
 
   return isOnline;
 }

@@ -14,6 +14,13 @@
       "spec": "docs/tasks/002-task-registry.md",
       "branch": "codex/002-task-registry",
       "pr": 2
+    },
+    {
+      "id": "TASK-003",
+      "status": "in_progress",
+      "spec": "docs/tasks/003-shared-online-status.md",
+      "branch": "codex/003-shared-online-status",
+      "pr": null
     }
   ]
 }

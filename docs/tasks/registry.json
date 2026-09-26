@@ -21,6 +21,13 @@
       "spec": "docs/tasks/003-shared-online-status.md",
       "branch": "codex/003-shared-online-status",
       "pr": 4
+    },
+    {
+      "id": "TASK-004",
+      "status": "in_review",
+      "spec": "docs/tasks/004-offline-pwa.md",
+      "branch": "codex/004-offline-pwa",
+      "pr": 6
     }
   ]
 }

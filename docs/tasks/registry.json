@@ -24,7 +24,7 @@
     },
     {
       "id": "TASK-004",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/004-offline-pwa.md",
       "branch": "codex/004-offline-pwa",
       "pr": 6

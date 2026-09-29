@@ -104,6 +104,33 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
         await expectError(await request("/api/inspections/not-a-uuid", method, method === "PATCH" ? { title: "x" } : undefined), 400, "INVALID_INPUT");
       }
     });
+    await t.test("malformed encoded route IDs return safe 400 JSON errors", async () => {
+      for (const encodedId of ["%ZZ", "%E0%A4%A"]) {
+        for (const method of ["GET", "PATCH", "DELETE"]) {
+          const response = await request(`/api/inspections/${encodedId}`, method,
+            method === "PATCH" ? { title: "x" } : undefined);
+          assert.equal(response.status, 400);
+          assert.match(response.headers.get("content-type") ?? "", /^application\/json/);
+          assert.deepEqual(await response.json(), {
+            error: { code: "INVALID_INPUT", message: "Invalid path parameter encoding." },
+          });
+        }
+      }
+    });
+    await t.test("unrelated errors with status 400 remain generic server errors", async () => {
+      for (const error of [new Error("Private failure"), new URIError("Unrelated URI failure")]) {
+        const query = t.mock.method(pool, "query", () => { throw Object.assign(error, { status: 400 }); });
+        try {
+          const response = await request("/api/inspections");
+          assert.equal(response.status, 500);
+          assert.deepEqual(await response.json(), {
+            error: { code: "INTERNAL_ERROR", message: "An unexpected server error occurred." },
+          });
+        } finally {
+          query.mock.restore();
+        }
+      }
+    });
     await t.test("malformed, oversized and unsupported request bodies return JSON", async () => {
       await expectError(await request("/api/inspections", "POST", null), 400, "INVALID_BODY");
       await expectError(await fetch(`${base}/api/inspections`, {

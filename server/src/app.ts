@@ -59,6 +59,12 @@ export function createApp(pool: Pool) {
       res.status(error.status).json({ error: { code: error.code, message: error.message } });
       return;
     }
+    // Express's router marks malformed route-parameter decoding with this signature.
+    if (error instanceof URIError && "status" in error && error.status === 400 &&
+        error.message.startsWith("Failed to decode param '")) {
+      res.status(400).json({ error: { code: "INVALID_INPUT", message: "Invalid path parameter encoding." } });
+      return;
+    }
     const type = typeof error === "object" && error !== null && "type" in error ? error.type : undefined;
     if (type === "entity.parse.failed" || type === "entity.too.large" || type === "charset.unsupported" || type === "encoding.unsupported") {
       const status = type === "entity.too.large" ? 413 : type === "entity.parse.failed" ? 400 : 415;

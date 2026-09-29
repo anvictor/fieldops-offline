@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local backend configuration
+server/.env
+server/.env.*
+!server/.env.example

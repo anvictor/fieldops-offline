@@ -31,7 +31,7 @@
     },
     {
       "id": "TASK-005",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/005-backend-foundation.md",
       "branch": "codex/005-backend-foundation",
       "pr": 8

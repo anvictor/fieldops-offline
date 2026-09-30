@@ -28,6 +28,13 @@
       "spec": "docs/tasks/004-offline-pwa.md",
       "branch": "codex/004-offline-pwa",
       "pr": 6
+    },
+    {
+      "id": "TASK-005",
+      "status": "in_review",
+      "spec": "docs/tasks/005-backend-foundation.md",
+      "branch": "codex/005-backend-foundation",
+      "pr": 8
     }
   ]
 }

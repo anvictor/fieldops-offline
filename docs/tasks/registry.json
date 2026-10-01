@@ -38,10 +38,10 @@
     },
     {
       "id": "TASK-006",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/006-backend-ci.md",
       "branch": "codex/006-backend-ci",
-      "pr": null
+      "pr": 10
     }
   ]
 }

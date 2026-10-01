@@ -35,6 +35,13 @@
       "spec": "docs/tasks/005-backend-foundation.md",
       "branch": "codex/005-backend-foundation",
       "pr": 8
+    },
+    {
+      "id": "TASK-006",
+      "status": "in_review",
+      "spec": "docs/tasks/006-backend-ci.md",
+      "branch": "codex/006-backend-ci",
+      "pr": 10
     }
   ]
 }

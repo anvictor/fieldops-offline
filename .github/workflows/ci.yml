@@ -52,6 +52,9 @@ jobs:
       - name: Type check and build
         run: npm run build
 
+      - name: Frontend synchronization tests
+        run: npm test
+
       - name: Backend type check and build
         run: npm run server:build
 

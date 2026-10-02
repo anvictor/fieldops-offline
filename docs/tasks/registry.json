@@ -38,7 +38,7 @@
     },
     {
       "id": "TASK-006",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/006-backend-ci.md",
       "branch": "codex/006-backend-ci",
       "pr": 10

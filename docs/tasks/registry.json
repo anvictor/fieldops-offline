@@ -45,10 +45,10 @@
     },
     {
       "id": "TASK-007",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/007-client-server-sync.md",
       "branch": "codex/007-client-server-sync",
-      "pr": null
+      "pr": 12
     }
   ]
 }

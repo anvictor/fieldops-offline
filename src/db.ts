@@ -1,203 +1,143 @@
 const DB_NAME = "fieldops-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+const QUEUE_CHANNEL = "fieldops-queue-changed";
+const listeners = new Set<() => void>();
+
+export type StoredInspection = { id: string; title: string; status: "draft" | "completed" };
+export type SyncQueueItem = {
+  id: string;
+  entityType: "inspection";
+  entityId: string;
+  operation: "CREATE" | "UPDATE" | "DELETE";
+  payload: StoredInspection | null;
+  createdAt: string;
+  sequence?: number;
+};
 
 export function openFieldOpsDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-
+    let blocked = false;
     request.onupgradeneeded = () => {
       const db = request.result;
-
       if (!db.objectStoreNames.contains("inspections")) {
-        const inspectionsStore = db.createObjectStore("inspections", {
-          keyPath: "id",
-        });
-
-        inspectionsStore.createIndex("status", "status", {
-          unique: false,
-        });
+        db.createObjectStore("inspections", { keyPath: "id" }).createIndex("status", "status");
       }
-
-      if (!db.objectStoreNames.contains("syncQueue")) {
-        db.createObjectStore("syncQueue", {
-          keyPath: "id",
-        });
-      }
+      if (!db.objectStoreNames.contains("syncQueue")) db.createObjectStore("syncQueue", { keyPath: "id" });
+      if (!db.objectStoreNames.contains("syncMetadata")) db.createObjectStore("syncMetadata");
+      // Keep v1 queue entries unchanged: their historical insertion order is unknown.
     };
-
     request.onsuccess = () => {
+      if (blocked) { request.result.close(); return; }
+      request.result.onversionchange = () => request.result.close();
       resolve(request.result);
     };
-
-    request.onerror = () => {
-      reject(request.error);
-    };
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => { blocked = true; reject(new Error("Close older FieldOps tabs to upgrade local storage.")); };
   });
 }
-type StoredInspection = {
-  id: string;
-  title: string;
-  status: "draft" | "completed";
-};
 
-type SyncOperation = "CREATE" | "UPDATE" | "DELETE";
-
-type SyncQueueItem = {
-  id: string;
-  entityType: "inspection";
-  entityId: string;
-  operation: SyncOperation;
-  payload: StoredInspection | null;
-  createdAt: string;
-};
-
-export async function saveInspection(
-  inspection: StoredInspection,
-): Promise<void> {
+async function transaction<T>(stores: string[], mode: IDBTransactionMode,
+  work: (tx: IDBTransaction, result: (value: T) => void) => void, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
   const db = await openFieldOpsDB();
+  try {
+    signal?.throwIfAborted();
+    return await new Promise<T>((resolve, reject) => {
+      const tx = db.transaction(stores, mode);
+      let value: T;
+      const abort = () => { try { tx.abort(); } catch { /* Already finished. */ } };
+      signal?.addEventListener("abort", abort, { once: true });
+      const cleanup = () => signal?.removeEventListener("abort", abort);
+      tx.oncomplete = () => { cleanup(); resolve(value); };
+      tx.onabort = () => { cleanup(); reject(tx.error ?? new Error("Local transaction aborted.")); };
+      tx.onerror = () => { /* onabort handles request errors and transaction rollback. */ };
+      try { work(tx, (result) => { value = result; }); } catch (error) { abort(); reject(error); }
+    });
+  } finally { db.close(); }
+}
 
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("inspections", "readwrite");
+function notifyQueueChanged() {
+  for (const listener of listeners) listener();
+  // Notification only: receivers always reread IndexedDB, never a supplied count.
+  if (typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel(QUEUE_CHANNEL);
+    channel.postMessage("changed");
+    channel.close();
+  }
+}
 
-    const store = transaction.objectStore("inspections");
+export function subscribeQueueChanges(listener: () => void): () => void {
+  listeners.add(listener);
+  const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(QUEUE_CHANNEL);
+  if (channel) channel.onmessage = () => listener();
+  return () => { listeners.delete(listener); channel?.close(); };
+}
 
-    store.put(inspection);
-
-    transaction.oncomplete = () => {
-      resolve();
-    };
-
-    transaction.onerror = () => {
-      reject(transaction.error);
-    };
+export function loadInspections(): Promise<StoredInspection[]> {
+  return transaction(["inspections"], "readonly", (tx, result) => {
+    const request = tx.objectStore("inspections").getAll();
+    request.onsuccess = () => result(request.result);
   });
 }
-export async function loadInspections(): Promise<StoredInspection[]> {
-  const db = await openFieldOpsDB();
 
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("inspections", "readonly");
+export function saveInspection(inspection: StoredInspection): Promise<void> {
+  return transaction(["inspections"], "readwrite", (tx) => { tx.objectStore("inspections").put(inspection); });
+}
+export function deleteInspectionFromDB(id: string): Promise<void> {
+  return transaction(["inspections"], "readwrite", (tx) => { tx.objectStore("inspections").delete(id); });
+}
 
-    const store = transaction.objectStore("inspections");
-
-    const request = store.getAll();
-
+async function mutateWithSync(entityId: string, operation: SyncQueueItem["operation"], payload: StoredInspection | null) {
+  // Capture the payload before opening the database: later caller edits cannot change it.
+  const item: SyncQueueItem = { id: crypto.randomUUID(), entityType: "inspection", entityId,
+    operation, payload: structuredClone(payload), createdAt: new Date().toISOString() };
+  await transaction<void>(["inspections", "syncQueue", "syncMetadata"], "readwrite", (tx) => {
+    const metadata = tx.objectStore("syncMetadata");
+    const request = metadata.get("nextSequence");
     request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onerror = () => {
-      reject(request.error);
-    };
-  });
-}
-export async function deleteInspectionFromDB(id: string): Promise<void> {
-  const db = await openFieldOpsDB();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("inspections", "readwrite");
-
-    const store = transaction.objectStore("inspections");
-
-    store.delete(id);
-
-    transaction.oncomplete = () => {
-      resolve();
-    };
-
-    transaction.onerror = () => {
-      reject(transaction.error);
+      const sequence = request.result ?? 1;
+      if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) { tx.abort(); return; }
+      item.sequence = sequence;
+      metadata.put(sequence + 1, "nextSequence");
+      const store = tx.objectStore("inspections");
+      if (item.operation === "DELETE") store.delete(entityId); else store.put(item.payload);
+      tx.objectStore("syncQueue").add(item);
     };
   });
+  notifyQueueChanged();
 }
 
-export async function saveInspectionWithSync(
-  inspection: StoredInspection,
-  operation: "CREATE" | "UPDATE",
-): Promise<void> {
-  const db = await openFieldOpsDB();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(
-      ["inspections", "syncQueue"],
-      "readwrite",
-    );
-
-    const inspectionsStore = transaction.objectStore("inspections");
-    const syncQueueStore = transaction.objectStore("syncQueue");
-
-    inspectionsStore.put(inspection);
-
-    const queueItem: SyncQueueItem = {
-      id: crypto.randomUUID(),
-      entityType: "inspection",
-      entityId: inspection.id,
-      operation,
-      payload: inspection,
-      createdAt: new Date().toISOString(),
-    };
-
-    syncQueueStore.put(queueItem);
-
-    transaction.oncomplete = () => {
-      resolve();
-    };
-
-    transaction.onerror = () => {
-      reject(transaction.error);
-    };
-  });
+export function saveInspectionWithSync(inspection: StoredInspection, operation: "CREATE" | "UPDATE"): Promise<void> {
+  return mutateWithSync(inspection.id, operation, inspection);
+}
+export function deleteInspectionWithSync(id: string): Promise<void> {
+  return mutateWithSync(id, "DELETE", null);
 }
 
-export async function deleteInspectionWithSync(id: string): Promise<void> {
-  const db = await openFieldOpsDB();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(
-      ["inspections", "syncQueue"],
-      "readwrite",
-    );
-
-    const inspectionsStore = transaction.objectStore("inspections");
-    const syncQueueStore = transaction.objectStore("syncQueue");
-
-    inspectionsStore.delete(id);
-
-    const queueItem: SyncQueueItem = {
-      id: crypto.randomUUID(),
-      entityType: "inspection",
-      entityId: id,
-      operation: "DELETE",
-      payload: null,
-      createdAt: new Date().toISOString(),
-    };
-
-    syncQueueStore.put(queueItem);
-
-    transaction.oncomplete = () => {
-      resolve();
-    };
-
-    transaction.onerror = () => {
-      reject(transaction.error);
-    };
-  });
-}
 export async function loadSyncQueue(): Promise<SyncQueueItem[]> {
-  const db = await openFieldOpsDB();
-
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction("syncQueue", "readonly");
-    const store = transaction.objectStore("syncQueue");
-
-    const request = store.getAll();
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onerror = () => {
-      reject(request.error);
-    };
+  const items = await transaction<SyncQueueItem[]>(["syncQueue"], "readonly", (tx, result) => {
+    const request = tx.objectStore("syncQueue").getAll();
+    request.onsuccess = () => result(request.result);
   });
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  return items.sort((a, b) => {
+    if (a.sequence === undefined && b.sequence !== undefined) return -1;
+    if (a.sequence !== undefined && b.sequence === undefined) return 1;
+    if (a.sequence !== undefined && b.sequence !== undefined) return a.sequence - b.sequence;
+    return compare(a.createdAt, b.createdAt) || compare(a.id, b.id);
+  });
+}
+
+// Must be called inside the sync Web Lock. Re-read before deleting; never touch inspections.
+export async function removeQueueItem(id: string, signal: AbortSignal): Promise<void> {
+  await transaction<void>(["syncQueue"], "readwrite", (tx) => {
+    const store = tx.objectStore("syncQueue");
+    const request = store.get(id);
+    request.onsuccess = () => {
+      if (signal.aborted) { tx.abort(); return; }
+      if (request.result) store.delete(id);
+    };
+  }, signal);
+  notifyQueueChanged();
 }

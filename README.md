@@ -1,75 +1,51 @@
-# React + TypeScript + Vite
+# FieldOps Offline
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An offline-first React/TypeScript inspection PWA. Inspections and queued mutations live in IndexedDB; a separate Express/PostgreSQL API supports local-development synchronization. GitHub Pages hosts only the PWA, not a public backend.
 
-Currently, two official plugins are available:
+## Local development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Use Node.js 20.19+ and install both lockfiles:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```sh
+npm ci
+npm --prefix server ci
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+Follow [server setup](server/README.md) to start PostgreSQL and run migrations. Preserve an existing `server/.env`; create it from the example only if absent. Never commit real credentials.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```sh
+npm run server:dev  # API at 127.0.0.1:3001
+npm run dev        # open the printed /fieldops-offline/ URL
 ```
+
+Vite proxies relative `/api` requests to `http://127.0.0.1:3001`. The API and PWA remain separate applications. Do not expose this unauthenticated development API publicly.
+
+## How synchronization works
+
+Local CREATE/UPDATE/DELETE and the queued payload snapshot commit in one IndexedDB transaction. Database v2 adds one metadata store containing a durable next-sequence counter. New operations replay by sequence; timestamps do not order them. Existing v1 entries stay unchanged and replay first by createdAt then ID. Historical insertion order cannot be reconstructed. No operations are compacted.
+
+An exclusive same-origin Web Lock named `fieldops-inspection-sync` covers loading, sending, validating acknowledgment and committing removal. Overlapping triggers/tabs cannot process concurrently. BroadcastChannel only notifies queue changes; each receiver rereads IndexedDB instead of trusting a message count. All queue removals, including Discard, use the same lock. API responses never overwrite local inspection state.
+
+Delivery is ordered and **at least once**, not exactly once. CREATE carries the local UUID; matching normalized server content returns 200 on replay, different content returns 409. DELETE can confirm an already missing inspection only through the API's JSON `INSPECTION_NOT_FOUND` response. PATCH missing is blocked. Server-side fencing is not implemented: Web Locks cannot fence a stale request that survives browser-context termination. Assume one logical writer per inspection; no multi-device conflict resolution or initial server download exists.
+
+Synchronization attempts occur on online startup, reconnect, online local mutation, and Retry. Requests time out after 8 seconds; network/timeout/5xx errors receive two retries after 500ms and 1000ms. A retained failure stops FIFO. Invalid legacy items remain visible as a blocked operation. Pending count, progress and safe errors appear in the UI. Discard requires confirmation, affects only the blocked queue item and leaves local data unchanged; discarding CREATE can leave later UPDATE/DELETE operations blocked.
+
+If Web Locks is unavailable, synchronization stays disabled and offline CRUD continues. Close old app tabs if a database upgrade is blocked. New titles are trimmed and limited to 1–200 Unicode characters without null characters.
+
+## Production configuration
+
+Without configuration, production builds (including GitHub Pages) keep pending operations locally and make no sync requests. Optionally provide `VITE_API_BASE_URL` at build time, e.g. `https://api.example.com` or `https://api.example.com/base`, **without `/api`**. HTTP(S) only; credentials, queries, fragments and invalid URLs are rejected. Trailing slashes are normalized, then sync appends `/api/inspections`. Development always uses the relative proxy.
+
+The variable is public build configuration, not a secret. A valid URL does not establish backend reachability, CORS permission, HTTPS compatibility, authentication or hosting. This task does not configure public backend hosting or CORS. The PWA caching strategy and Pages deployment are unchanged.
+
+## Validation
+
+```sh
+npm run lint
+npm run build
+npm run server:build
+npm test
+npm run server:test  # requires disposable PostgreSQL TEST_DATABASE_URL
+```
+
+Vitest runs deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. See [task registry conventions](docs/tasks/README.md) for review and completion gates.

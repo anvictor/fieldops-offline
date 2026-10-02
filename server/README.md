@@ -1,6 +1,6 @@
 # FieldOps API
 
-A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA does not call it. No IndexedDB synchronization, authentication, or conflict resolution is implemented.
+A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA can replay its IndexedDB mutation queue through the local Vite proxy. No server-to-client download, authentication or conflict resolution is implemented.
 
 ## Local setup
 
@@ -37,7 +37,7 @@ Root scripts delegate to `server/`, so its `.env` resolves consistently. For a c
 
 ## REST contract
 
-All responses are JSON except successful deletion. Inspection objects have server-generated UUID `id`, trimmed `title` (1–200 Unicode characters, no null character), `status` (`draft` or `completed`), and UTC ISO `createdAt` / `updatedAt` timestamps.
+All responses are JSON except successful deletion. Inspection objects have UUID `id` (server-generated when omitted on create), trimmed `title` (1–200 Unicode characters, no null character), `status` (`draft` or `completed`), and UTC ISO `createdAt` / `updatedAt` timestamps.
 
 - `GET /api/health`: 200 `{ "status": "ok", "service": "fieldops-api" }`. Process liveness only, not database readiness.
 - `GET /api/inspections`: 200 array ordered by creation time then ID.
@@ -46,7 +46,11 @@ All responses are JSON except successful deletion. Inspection objects have serve
 - `PATCH /api/inspections/:id`: at least one of title/status; returns 200. Omitted values, ID, and creation time are preserved.
 - `DELETE /api/inspections/:id`: 204 with no body; 404 if missing.
 
-Only title/status are writable. Unknown fields, invalid UUIDs, and invalid values return 400. Writes require `Content-Type: application/json` (415 otherwise); the body limit is 16 KiB (413). Errors use `{ "error": { "code": "INVALID_INPUT", "message": "..." } }`; unexpected errors return a generic 500 without stack traces or database details. SQL values are parameterized.
+POST also accepts an optional client UUID `id`. A new ID returns 201; replay of the same ID and normalized title/status returns the existing row with 200. Omitted status defaults to draft before comparison. Different content at that ID returns 409 `ID_CONFLICT`; concurrent same-ID requests use PostgreSQL uniqueness safely. PATCH still accepts only title/status.
+
+Missing inspection GET/PATCH/DELETE returns 404 JSON `INSPECTION_NOT_FOUND`; unknown routes retain `NOT_FOUND`. The client treats only a verified inspection-specific missing response as successful repeated DELETE; missing PATCH remains blocked.
+
+Only title/status (and optional create id) are writable. Unknown fields, invalid UUIDs, and invalid values return 400. Writes require `Content-Type: application/json` (415 otherwise); the body limit is 16 KiB (413). Errors use `{ "error": { "code": "INVALID_INPUT", "message": "..." } }`; unexpected errors return a generic 500 without stack traces or database details. SQL values are parameterized.
 
 ```sh
 curl http://127.0.0.1:3001/api/health
@@ -70,4 +74,4 @@ No coverage percentage is configured. `*.test.ts` uses Node's test runner throug
 
 ## Deployment boundary
 
-GitHub Pages continues to deploy only the existing PWA. This task provides local API/database setup, not public backend hosting. Hosted frontend CI does not execute the database tests or backend build; run the backend gates explicitly before review. This unauthenticated API is for local development; public hosting, authorization, CORS policy, pagination, and operational hardening belong to later tasks.
+GitHub Pages continues to deploy only the existing PWA. This task provides local API/database setup, not public backend hosting. Hosted PR CI builds both applications and executes frontend synchronization tests plus the real-PostgreSQL backend suite. This unauthenticated API is for local development; public hosting, authorization, CORS policy, pagination, and operational hardening belong to later tasks.

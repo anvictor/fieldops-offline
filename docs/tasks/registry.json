@@ -42,6 +42,13 @@
       "spec": "docs/tasks/006-backend-ci.md",
       "branch": "codex/006-backend-ci",
       "pr": 10
+    },
+    {
+      "id": "TASK-007",
+      "status": "in_review",
+      "spec": "docs/tasks/007-client-server-sync.md",
+      "branch": "codex/007-client-server-sync",
+      "pr": 12
     }
   ]
 }

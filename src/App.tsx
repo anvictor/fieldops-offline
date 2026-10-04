@@ -1,11 +1,12 @@
 import "./App.css";
-import { useEffect, useState } from "react";
+import { normalizeTitle, resolveApiConfig } from "./api";
+import { createSyncManager } from "./sync";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
   loadInspections,
   loadSyncQueue,
-  openFieldOpsDB,
   saveInspectionWithSync,
 } from "./db";
 
@@ -53,22 +54,21 @@ function App() {
   const [statusFilter, setStatusFilter] = useState<"all" | InspectionStatus>(
     "all",
   );
-  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [sync] = useState(() => createSyncManager({
+    config: resolveApiConfig(import.meta.env.DEV, import.meta.env.VITE_API_BASE_URL),
+    locks: navigator.locks,
+    online: () => navigator.onLine,
+  }));
+  const syncState = useSyncExternalStore(sync.subscribe, sync.getSnapshot);
+  const validTitle = normalizeTitle(newTitle);
   const isOnline = useOnlineStatus();
 
   useEffect(() => {
     async function initDB() {
       try {
-        const db = await openFieldOpsDB();
-
-        console.log("FieldOps DB opened:", db.name);
-
         const storedInspections = await loadInspections();
 
         setInspections(storedInspections);
-        const syncQueue = await loadSyncQueue();
-
-        setPendingSyncCount(syncQueue.length);
       } catch (error) {
         console.error("Failed to initialize FieldOps DB:", error);
       }
@@ -76,6 +76,13 @@ function App() {
 
     initDB();
   }, []);
+  useEffect(() => {
+    sync.start();
+    return () => sync.stop();
+  }, [sync]);
+  useEffect(() => {
+    if (isOnline) void sync.retry(); else sync.pause();
+  }, [isOnline, sync]);
   useEffect(() => {
     if (import.meta.env.DEV) {
       console.log("development mode, StrictMode may re-run effects");
@@ -108,7 +115,7 @@ function App() {
 
     try {
       await saveInspectionWithSync(updatedInspection, "UPDATE");
-      await refreshPendingSyncCount();
+      if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) =>
         prevInspections.map((item) =>
@@ -121,19 +128,19 @@ function App() {
   }
 
   async function addInspection() {
-    if (!newTitle.trim()) {
+    if (!validTitle) {
       return;
     }
 
     const newInspection: Inspection = {
       id: crypto.randomUUID(),
-      title: newTitle,
+      title: validTitle,
       status: "draft",
     };
 
     try {
       await saveInspectionWithSync(newInspection, "CREATE");
-      await refreshPendingSyncCount();
+      if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) => [...prevInspections, newInspection]);
 
@@ -146,7 +153,7 @@ function App() {
   async function deleteInspection(id: string) {
     try {
       await deleteInspectionWithSync(id);
-      await refreshPendingSyncCount();
+      if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) =>
         prevInspections.filter((item) => item.id !== id),
@@ -179,11 +186,6 @@ function App() {
       ? inspections
       : inspections.filter((inspection) => inspection.status === statusFilter);
 
-  async function refreshPendingSyncCount() {
-    const syncQueue = await loadSyncQueue();
-    setPendingSyncCount(syncQueue.length);
-  }
-
   return (
     <main>
       <h1>FieldOps Offline</h1>
@@ -201,7 +203,16 @@ function App() {
         Completed: {completedCount} / {inspections.length}
       </p>
       <p>Draft: {draftCount}</p>
-      <p>Pending sync: {pendingSyncCount}</p>
+      <p>Pending sync: {syncState.pendingCount}</p>
+      <div aria-live="polite">
+        {syncState.syncing && <p>Synchronizing…</p>}
+        {syncState.unavailable && <p>{syncState.unavailable}</p>}
+        {syncState.error && <p role="alert">Synchronization error: {syncState.error.message}</p>}
+      </div>
+      <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}
+        onClick={() => void sync.retry()}>Retry synchronization</button>
+      {syncState.error?.permanent && <button disabled={syncState.syncing || !!syncState.unavailable}
+        onClick={() => void sync.discard((message) => window.confirm(message))}>Discard blocked operation</button>}
       <p>Connection: {isOnline ? "Online" : "Offline"}</p>
       <form onSubmit={handleSubmit}>
         <input
@@ -210,10 +221,11 @@ function App() {
           placeholder="Inspection title"
         />
 
-        <button type="submit" disabled={!newTitle.trim()}>
+        <button type="submit" disabled={!validTitle}>
           Add inspection
         </button>
       </form>
+      {newTitle && !validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
       {filteredInspections.map((inspection) => (
         <section key={inspection.id}>
           <InspectionCard

@@ -93,7 +93,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     });
     await t.test("reject invalid fields, titles, statuses, IDs and empty patches", async () => {
       for (const body of [{}, [], { title: " " }, { title: 1 }, { title: "x".repeat(201) },
-        { title: "bad\u0000text" }, { title: "x", status: "pending" }, { title: "x", id: randomUUID() },
+        { title: "bad\u0000text" }, { title: "x", status: "pending" }, { title: "x", id: "invalid" },
         { title: "x", createdAt }, { title: "x", status: null }]) {
         await expectError(await request("/api/inspections", "POST", body), 400, "INVALID_INPUT");
       }
@@ -141,15 +141,46 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     });
     await t.test("missing resources, unknown routes and deletion", async () => {
       const missing = randomUUID();
-      await expectError(await request(`/api/inspections/${missing}`), 404, "NOT_FOUND");
-      await expectError(await request(`/api/inspections/${missing}`, "PATCH", { title: "x" }), 404, "NOT_FOUND");
-      await expectError(await request(`/api/inspections/${missing}`, "DELETE"), 404, "NOT_FOUND");
+      await expectError(await request(`/api/inspections/${missing}`), 404, "INSPECTION_NOT_FOUND");
+      await expectError(await request(`/api/inspections/${missing}`, "PATCH", { title: "x" }), 404, "INSPECTION_NOT_FOUND");
+      await expectError(await request(`/api/inspections/${missing}`, "DELETE"), 404, "INSPECTION_NOT_FOUND");
       await expectError(await request("/unknown"), 404, "NOT_FOUND");
       const deleted = await request(`/api/inspections/${id}`, "DELETE");
       assert.equal(deleted.status, 204);
       assert.equal(await deleted.text(), "");
-      await expectError(await request(`/api/inspections/${id}`), 404, "NOT_FOUND");
+      await expectError(await request(`/api/inspections/${id}`), 404, "INSPECTION_NOT_FOUND");
       assert.deepEqual(await (await request("/api/inspections")).json(), []);
+    });
+    await t.test("client UUID replay normalizes content and rejects conflicts", async () => {
+      const clientId = randomUUID();
+      const first = await request("/api/inspections", "POST", { id: clientId, title: "  Client title  " });
+      assert.equal(first.status, 201);
+      const original = await first.json();
+      assert.equal(original.id, clientId);
+      for (const body of [{ id: clientId, title: "Client title", status: "draft" },
+        { id: clientId.toUpperCase(), title: " Client title " }]) {
+        const replay = await request("/api/inspections", "POST", body);
+        assert.equal(replay.status, 200);
+        assert.deepEqual(await replay.json(), original);
+      }
+      await expectError(await request("/api/inspections", "POST", { id: clientId, title: "Different" }), 409, "ID_CONFLICT");
+      await expectError(await request("/api/inspections", "POST", { id: clientId, title: "Client title", status: "completed" }), 409, "ID_CONFLICT");
+      await expectError(await request(`/api/inspections/${clientId}`, "PATCH", { id: randomUUID() }), 400, "INVALID_INPUT");
+      for (const invalidId of [null, 5, "invalid"]) {
+        await expectError(await request("/api/inspections", "POST", { id: invalidId, title: "x" }), 400, "INVALID_INPUT");
+      }
+      await request(`/api/inspections/${clientId}`, "DELETE");
+    });
+    await t.test("concurrent same-ID creates are safely idempotent or conflicting", async () => {
+      for (const conflict of [false, true]) {
+        const clientId = randomUUID();
+        const responses = await Promise.all(["First", conflict ? "Second" : "First"].map((title) =>
+          request("/api/inspections", "POST", { id: clientId, title })));
+        assert.deepEqual(responses.map((r) => r.status).sort(), conflict ? [201, 409] : [200, 201]);
+        if (conflict) await expectError(responses.find((r) => r.status === 409)!, 409, "ID_CONFLICT");
+        assert.equal((await pool.query("SELECT id FROM inspections WHERE id = $1", [clientId])).rowCount, 1);
+        await request(`/api/inspections/${clientId}`, "DELETE");
+      }
     });
     await t.test("database errors never expose SQL, stack traces, or credentials", async () => {
       await pool.query("DROP TABLE inspections");

@@ -78,8 +78,10 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
         if (response.status >= 500 && response.status <= 599) throw new SyncFailure("API unavailable. Retry when available.", false);
         if (item.operation === "DELETE" && response.status === 204) return;
         const json = /^(application\/json)(;|$)/i.test(response.headers.get("content-type") ?? "");
+        // Body transport failures are retryable; only a complete invalid JSON body is permanent.
+        const text = json ? await response.text() : null;
         let data: Record<string, unknown>;
-        try { data = json ? await response.json() : null; } catch { throw invalidAck(); }
+        try { data = text === null ? null : JSON.parse(text); } catch { throw invalidAck(); }
         if (!data || typeof data !== "object" || Array.isArray(data)) throw invalidAck();
         const error = data.error as { code?: unknown; message?: unknown } | undefined;
         const missing = response.status === 404 && error?.code === "INSPECTION_NOT_FOUND" && typeof error.message === "string";

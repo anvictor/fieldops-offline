@@ -38,23 +38,24 @@ export function createSyncManager(options: Options) {
   let runController: AbortController | null = null;
   let unsubscribe: (() => void) | undefined;
   let refreshVersion = 0;
-  async function refresh() {
+  const isCurrent = (owner: AbortSignal) => owner === lifetime.signal && !owner.aborted;
+  async function refresh(signal = lifetime.signal) {
+    if (!isCurrent(signal)) return;
     const version = ++refreshVersion;
-    const signal = lifetime.signal;
     try {
       const queue = await load();
-      if (!signal.aborted && version === refreshVersion) {
+      if (isCurrent(signal) && version === refreshVersion) {
         const error = state.error?.itemId && !queue.some((item) => item.id === state.error!.itemId) ? null : state.error;
         publish({ pendingCount: queue.length, error });
       }
     } catch {
-      if (!signal.aborted) publish({ error: { message: "Could not read the local queue.", permanent: false, itemId: null } });
+      if (isCurrent(signal) && version === refreshVersion) publish({ error: { message: "Could not read the local queue.", permanent: false, itemId: null } });
     }
   }
 
   function trigger(): Promise<void> {
-    if (active) { rerun = true; return active; }
     if (lifetime.signal.aborted || state.unavailable || state.error || !options.online()) return Promise.resolve();
+    if (active) { rerun = true; return active; }
     const controller = new AbortController();
     runController = controller;
     const signal = controller.signal;
@@ -75,7 +76,7 @@ export function createSyncManager(options: Options) {
           await send(item, options.config.base!, signal);
           signal.throwIfAborted();
           await remove(item.id, signal);
-          await refresh();
+          await refresh(owner);
         }
       } catch (error) {
         if (!signal.aborted) publish({ error: {
@@ -84,7 +85,7 @@ export function createSyncManager(options: Options) {
           itemId: item?.id ?? null,
         } });
       } finally {
-        if (!owner.aborted) { publish({ syncing: false }); await refresh(); }
+        if (isCurrent(owner)) { publish({ syncing: false }); await refresh(owner); }
       }
     }).catch(() => {
       if (!signal.aborted) publish({ error: { message: "Could not acquire synchronization lock.", permanent: false, itemId: null } });
@@ -93,7 +94,8 @@ export function createSyncManager(options: Options) {
       owner.removeEventListener("abort", abort);
       if (runController === controller) {
         active = null; runController = null;
-        if (rerun && !owner.aborted) { rerun = false; void trigger(); }
+        // A restart may have requested work while this generation still owned the lock.
+        if (rerun) { rerun = false; void trigger(); }
       }
     });
     return active;
@@ -103,19 +105,25 @@ export function createSyncManager(options: Options) {
     getSnapshot: () => state,
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     start() {
+      lifetime.abort();
+      unsubscribe?.();
       lifetime = new AbortController();
       const signal = lifetime.signal;
+      publish({ syncing: false });
       unsubscribe = (options.subscribeQueue ?? subscribeQueueChanges)(() => {
-        void refresh().then(() => { if (!signal.aborted) void trigger(); });
+        void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
       });
-      void refresh().then(() => { if (!signal.aborted) void trigger(); });
+      void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
     },
-    stop() { lifetime.abort(); unsubscribe?.(); active = null; runController = null; },
+    // Keep active until the lock request settles: abort does not release a held Web Lock.
+    stop() { lifetime.abort(); unsubscribe?.(); rerun = false; publish({ syncing: false }); },
     pause() { runController?.abort(); },
     trigger,
     async retry() {
+      const owner = lifetime.signal;
       // Retry after an active/aborted run has released its Web Lock.
       if (active) await active;
+      if (!isCurrent(owner)) return;
       publish({ error: null });
       await trigger();
     },
@@ -131,9 +139,9 @@ export function createSyncManager(options: Options) {
           signal.throwIfAborted();
           if (item) await remove(item.id, signal);
           if (!signal.aborted) publish({ error: null });
-          await refresh();
+          await refresh(signal);
         });
-        await trigger();
+        if (isCurrent(signal)) await trigger();
       } catch {
         if (!signal.aborted) publish({ error: { ...blocked, message: "Could not discard the queued operation. Retry safely." } });
       }

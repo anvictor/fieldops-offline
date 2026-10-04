@@ -32,14 +32,14 @@ function locks() {
     if (options.ifAvailable && options.signal) throw new Error("Invalid Web Locks options");
     names.push(name);
     if (options.signal?.aborted) return Promise.reject(options.signal.reason);
-    if (held && options.ifAvailable) return Promise.resolve(callback(null));
+    if (held && options.ifAvailable) return Promise.resolve().then(() => callback(null));
     const run = async () => {
       options.signal?.throwIfAborted();
       held = true;
       try { await callback({ name, mode: "exclusive" } as Lock); } finally { held = false; }
     };
     // Reserve immediately so simultaneous ifAvailable calls cannot both enter.
-    if (!held) { held = true; const p = run(); tail = p.catch(() => {}); return p; }
+    if (!held) { held = true; const p = Promise.resolve().then(run); tail = p.catch(() => {}); return p; }
     const p = tail.then(run); tail = p.catch(() => {}); return p;
   });
   return { request: request as unknown as LockManager["request"], names, spy: request };
@@ -256,5 +256,103 @@ describe("Web Lock coordination and UI state", () => {
   });
   it("queue subscription cleanup stops notifications", async () => {
     const notify = vi.fn();const stop = subscribeQueueChanges(notify);stop();await saveInspectionWithSync(inspection, "CREATE");expect(notify).not.toHaveBeenCalled();
+  });
+});
+
+describe("review regressions: restart ownership and response streams", () => {
+  it.each(["load", "send"])("waits for the old lock after stop/start during %s", async (stage) => {
+    const queued = item();let queue = [queued];
+    const entered = deferred();const release = deferred();const nextEntered = deferred();const nextRelease = deferred();
+    const lock = locks();let firstLoad = true;let sends = 0;
+    const load = async () => {
+      if (firstLoad) {
+        firstLoad = false;
+        if (stage === "load") { entered.resolve();await release.promise; }
+      }
+      return [...queue];
+    };
+    const send = vi.fn(async (_item, _base, owner: AbortSignal) => {
+      sends++;
+      if (stage === "send" && sends === 1) { entered.resolve();await release.promise;expect(owner.aborted).toBe(true); }
+      else { nextEntered.resolve();await nextRelease.promise; }
+    });
+    const remove = vi.fn(async () => { queue = []; });
+    const m = manager({ locks: lock, load, send, remove, subscribeQueue: () => () => {} });
+    const old = m.trigger();await entered.promise;
+    m.stop();m.start();void m.trigger();
+    release.resolve();await old;
+    await nextEntered.promise;
+    expect(remove).not.toHaveBeenCalled();
+    expect(lock.spy).toHaveBeenCalledTimes(2);
+    expect(m.getSnapshot().syncing).toBe(true);
+    nextRelease.resolve();
+    await vi.waitFor(() => expect(m.getSnapshot()).toMatchObject({ syncing: false, pendingCount: 0, error: null }));
+    expect(remove).toHaveBeenCalledExactlyOnceWith(queued.id, expect.any(AbortSignal));
+    expect(queue).toEqual([]);
+    // Retry is enabled once idle and can process newly queued work.
+    queue = [item()];await m.retry();expect(remove).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a stale refresh failure after a new generation starts", async () => {
+    const release = deferred();let first = true;
+    const m = manager({ load: async () => {
+      if (first) { first = false;await release.promise;throw new Error("old read failed"); }
+      return [];
+    }, subscribeQueue: () => () => {} });
+    m.start();m.stop();m.start();void m.trigger();
+    release.resolve();await tick();
+    expect(m.getSnapshot()).toMatchObject({ syncing: false, pendingCount: 0, error: null });
+  });
+
+  it("an old pending Retry cannot clear the restarted generation's failure", async () => {
+    const entered = deferred();const release = deferred();let first = true;const queued = item();
+    const m = manager({ load: async () => [queued], send: async () => {
+      if (first) { first = false;entered.resolve();await release.promise; }
+      else throw new SyncFailure("New failure", true);
+    }, subscribeQueue: () => () => {} });
+    const old = m.trigger();await entered.promise;const retry = m.retry();
+    m.stop();m.start();release.resolve();await old;await retry;
+    await vi.waitFor(() => expect(m.getSnapshot().error?.message).toBe("New failure"));
+    expect(m.getSnapshot().syncing).toBe(false);
+  });
+
+  it("retries an errored response stream exactly three times and retains the queue", async () => {
+    vi.useFakeTimers();const queued = item();const bodies: unknown[] = [];
+    const f = vi.fn(async (_url, init) => {
+      bodies.push(init.body);
+      return new Response(new ReadableStream({
+        start(controller) { controller.enqueue(new TextEncoder().encode('{"id":')); },
+        pull(controller) { controller.error(new TypeError("socket terminated")); },
+      }), { status: 201, headers: { "Content-Type": "application/json" } });
+    });
+    const remove = vi.fn();const m = manager({ load: async () => [queued], remove,
+      send: (entry, base, owner) => sendQueueItem(entry, base, owner, f) });
+    const run = m.trigger();
+    await vi.advanceTimersByTimeAsync(499);expect(f).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);expect(f).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(999);expect(f).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);await run;expect(f).toHaveBeenCalledTimes(3);
+    expect(new Set(bodies).size).toBe(1);expect(remove).not.toHaveBeenCalled();
+    expect(m.getSnapshot()).toMatchObject({ pendingCount: 1, syncing: false, error: { permanent: false } });
+  });
+
+  it.each(['{"id":', '{"id":"wrong"}'])("complete invalid acknowledgment %s is permanent without retry", async (body) => {
+    const f = vi.fn(async () => new Response(body, { status: 201, headers: { "Content-Type": "application/json" } }));
+    await expect(sendQueueItem(item(), "", signal(), f)).rejects.toMatchObject({ permanent: true });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts during response body reading without retry or acknowledgment", async () => {
+    const reading = deferred();let stream!: ReadableStreamDefaultController<Uint8Array>;
+    const f = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) { stream = controller;controller.enqueue(new TextEncoder().encode('{"id":')); },
+      pull() { reading.resolve(); },
+    }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    const remove = vi.fn();const m = manager({ load: async () => [item()], remove,
+      send: (entry, base, owner) => sendQueueItem(entry, base, owner, f) });
+    const run = m.trigger();await reading.promise;m.pause();await run;
+    expect(f).toHaveBeenCalledTimes(1);expect(remove).not.toHaveBeenCalled();
+    expect(m.getSnapshot()).toMatchObject({ syncing: false, error: null, pendingCount: 1 });
+    stream.close();
   });
 });

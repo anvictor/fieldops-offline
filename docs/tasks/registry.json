@@ -59,10 +59,10 @@
     },
     {
       "id": "TASK-009",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/009-persist-review-evidence.md",
       "branch": "codex/009-persist-review-evidence",
-      "pr": null
+      "pr": 17
     }
   ]
 }

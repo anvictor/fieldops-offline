@@ -29,6 +29,15 @@ Allocate the next unused sequential numeric ID after checking the registry on cu
 
 Normal progression: `draft → ready → in_progress → in_review → done`.
 
+Before implementation begins, Agent B requirements approval must be durably
+persisted for the reviewed specification SHA and implementation must be authorized.
+Use the [workflow evidence procedure](../agent-context/workflow.md#independent-review-evidence)
+when preparing or checking reviews. Material requirements changes require renewed
+approval. Before implementation merge, Agent B approval must already exist in the
+PR Conversation for the exact final head, with required CI successful for that SHA.
+Any head movement invalidates implementation approval. Status alone never proves
+approval; do not treat an internal summary as persisted evidence.
+
 `in_progress` requires a non-null branch. `in_review` and `done` require both branch and PR. Requested fixes remain `in_review` while the implementation PR is open. If it closes and implementation continues without an open PR, status may return to `in_progress`; retain its historical PR reference until a replacement is established. A blocked task resumes at the stage matching actual work state after resolution. Never infer approval from a status label.
 
 ## Authority and stale state
@@ -39,11 +48,20 @@ Before acting, compare the recorded task references and state with GitHub eviden
 
 ## Completion and reconciliation
 
-Completion evidence means the implementation PR is merged, required reviews and checks satisfied the gates, and required post-merge verification is complete. When deployment applies, verify the successful deployment for the merged commit and the live result as required by `CONVENTIONS.md`. A green pre-merge CI run or merged PR alone does not prove deployment success. Cite evidence in the reconciliation PR; do not add evidence fields to the registry.
+Completion evidence means the implementation PR is merged, required reviews and checks satisfied the gates, and required post-merge verification is complete. When deployment applies, verify the successful deployment for the merged commit and the live result as required by `CONVENTIONS.md`. A green pre-merge CI run or merged PR alone does not prove deployment success. Before requesting reconciliation to done, durably record the merge SHA, applicable
+deployment run/result for that SHA, live checks/results and limitations in the
+implementation PR Conversation. Distinguish direct checks from linked/reported
+evidence. Cite those permalinks in the reconciliation PR; missing evidence blocks
+completion and must not be invented. Do not add evidence fields to the registry.
 
-An implementation PR must never predict `done` for its own task. Initially TASK-002 is `in_progress` with its branch and `pr: null`. After its implementation PR exists, update its entry to `in_review` with the actual PR number on the same feature branch.
+An implementation PR must never predict `done` for its own task. During implementation a task is `in_progress` with its branch and `pr: null`. After its implementation PR exists, update its entry to `in_review` with the actual PR number on the same feature branch.
 
-After merge and required completion verification, a separate registry-only reconciliation PR changes TASK-002 to `done`. This is administrative maintenance for TASK-002, not a new task. Retain its implementation references, follow applicable `AGENTS.md` gates, and change only `docs/tasks/registry.json`. Until reconciliation merges, consumers must recognize that recorded state can lag GitHub evidence.
+After merge and required completion verification, a separate registry-only reconciliation PR changes that task to `done`. This is administrative maintenance for the same task, not a new task. Retain its implementation references, follow applicable `AGENTS.md` gates, and change only `docs/tasks/registry.json`. The reconciliation PR itself requires Agent B-authored approval in its Conversation
+for its own exact final head, successful applicable CI for that SHA and all existing
+merge gates. Any change to its head invalidates that approval and requires re-review.
+Retain the original implementation branch and PR; reconciliation never replaces
+them. Until reconciliation merges, consumers must recognize that recorded state
+can lag GitHub evidence.
 
 ## Validation
 

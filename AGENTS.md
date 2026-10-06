@@ -43,6 +43,9 @@ For every non-trivial development task:
    tests and production build. **Do not merge** unless every criterion is met,
    self-review and independent review pass, and CI is green. Honor a user-directed
    stop before merge. Applicable deployment/live verification follows merge.
+7. Before merge, Agent B approval must already be durably persisted in GitHub
+   for the exact final head SHA, with successful required CI for that same SHA.
+   Any subsequent head movement invalidates approval and requires re-review.
 
 This root file owns these mandatory gates. Modules supplement them; task scope
 and registry status never waive them or establish approval.

@@ -52,7 +52,7 @@
     },
     {
       "id": "TASK-008",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/008-lazy-loaded-agent-context.md",
       "branch": "codex/008-lazy-loaded-agent-context",
       "pr": 14

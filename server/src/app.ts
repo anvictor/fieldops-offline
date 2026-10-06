@@ -2,14 +2,17 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import type { ErrorRequestHandler } from "express";
 import type { Pool } from "pg";
+import type { ApiSecurity } from "./config.js";
+import { securityMiddleware } from "./security.js";
 import { ApiError, inspectionId, inspectionInput } from "./validation.js";
 
 const columns = 'id, title, status, created_at AS "createdAt", updated_at AS "updatedAt"';
 const notFound = () => new ApiError(404, "INSPECTION_NOT_FOUND", "Inspection not found.");
 
-export function createApp(pool: Pool) {
+export function createApp(pool: Pool, security: ApiSecurity = { mode: "development" }) {
   const app = express();
   app.disable("x-powered-by");
+  app.use(securityMiddleware(security));
   app.use((req, _res, next) => {
     if (["POST", "PATCH"].includes(req.method) && !req.is("application/json")) {
       return next(new ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Use Content-Type: application/json."));

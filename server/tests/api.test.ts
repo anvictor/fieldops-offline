@@ -195,3 +195,40 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     await admin.end();
   }
 });
+
+await test("production owner authorization and CORS preserve PostgreSQL CRUD and replay", async () => {
+  const admin = new pg.Pool({ connectionString });
+  const schema = `test_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA "${schema}"`);
+  const pool = new pg.Pool({ connectionString, options: `-c search_path=${schema}` });
+  const token = "integration_fixture_".padEnd(43, "x");
+  const origin = "https://anvictor.github.io";
+  const server = createApp(pool, { mode: "production", token, origins: [origin] }).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (path: string, method = "GET", body?: unknown) => fetch(base + path, {
+    method, headers: { Authorization: `Bearer ${token}`, Origin: origin, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  try {
+    await migrate(pool);
+    const id = randomUUID();
+    const denied = await fetch(`${base}/api/inspections`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, title: "Private" }) });
+    assert.equal(denied.status, 401);
+    assert.equal((await pool.query("SELECT * FROM inspections")).rowCount, 0);
+    const first = await request("/api/inspections", "POST", { id, title: "Private" });
+    assert.equal(first.status, 201);
+    assert.equal(first.headers.get("access-control-allow-origin"), origin);
+    assert.equal((await request("/api/inspections", "POST", { id, title: "Private" })).status, 200);
+    assert.equal((await request(`/api/inspections/${id}`)).status, 200);
+    assert.equal((await request(`/api/inspections/${id}`, "PATCH", { status: "completed" })).status, 200);
+    assert.equal((await (await request(`/api/inspections/${id}`)).json()).status, "completed");
+    assert.equal((await request(`/api/inspections/${id}`, "DELETE")).status, 204);
+    const missing = await request(`/api/inspections/${id}`, "DELETE");
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "INSPECTION_NOT_FOUND");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await pool.end();await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end();
+  }
+});

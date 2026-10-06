@@ -18,7 +18,7 @@ npm run server:dev  # API at 127.0.0.1:3001
 npm run dev        # open the printed /fieldops-offline/ URL
 ```
 
-Vite proxies relative `/api` requests to `http://127.0.0.1:3001`. The API and PWA remain separate applications. Do not expose this unauthenticated development API publicly.
+Vite proxies relative `/api` requests to `http://127.0.0.1:3001`. The API and PWA remain separate applications. Do not expose this unauthenticated development API publicly. A separately configured production API foundation supports a private owner token and explicit CORS; see [production setup](server/README.md#production-api-foundation). It is not an already hosted backend or multi-user login.
 
 ## How synchronization works
 

@@ -1,0 +1,13 @@
+*
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.test.json
+!src/
+!src/**
+!tests/
+!tests/**
+!migrations/
+!migrations/**
+!Dockerfile
+!.dockerignore

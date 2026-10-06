@@ -70,3 +70,15 @@ Agent B re-review and successful required CI for the new head before merging.
 A prior green run or chat-only review summary is insufficient. Use the
 [workflow procedure](workflow.md#independent-review-evidence) when verifying review
 attribution and permalinks. This documents a manual gate, not new CI automation.
+
+
+## Production API foundation checks
+
+For API/security/container changes, load server/README.md and backend context.
+Backend Node tests also cover fail-closed configuration and HTTP auth/CORS ordering,
+plus real-PostgreSQL production CRUD/replay. Verify the built non-root image with
+throwaway runtime secrets and disposable DB: migrations/reruns, liveness, denied
+access and authenticated CRUD. Ports published locally must bind loopback.
+Do not print env/credentials, disable certificate verification or equate container
+smoke tests with a real hosted public deployment. Record hosting/TLS/client rollout
+prerequisites separately. CI runs backend tests; local Docker smoke is extra evidence.

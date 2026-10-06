@@ -1,12 +1,11 @@
 import { createApp } from "./app.js";
-import { databaseUrl, serverPort } from "./config.js";
+import { databaseUrl, serverConfiguration } from "./config.js";
 import { createPool } from "./database.js";
 
 try {
-  const port = serverPort();
-  const host = process.env.HOST ?? "127.0.0.1";
+  const { port, host, security } = serverConfiguration();
   const pool = createPool(databaseUrl());
-  const server = createApp(pool).listen(port, host, () => {
+  const server = createApp(pool, security).listen(port, host, () => {
     console.log(`FieldOps API listening on ${host}:${port}`);
   });
   server.on("error", () => {
@@ -27,6 +26,6 @@ try {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 } catch {
-  console.error("API startup failed. Check DATABASE_URL, HOST, and PORT configuration.");
+  console.error("API startup failed. Check database and API configuration.");
   process.exitCode = 1;
 }

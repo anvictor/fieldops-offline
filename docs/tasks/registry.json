@@ -49,6 +49,13 @@
       "spec": "docs/tasks/007-client-server-sync.md",
       "branch": "codex/007-client-server-sync",
       "pr": 12
+    },
+    {
+      "id": "TASK-008",
+      "status": "in_review",
+      "spec": "docs/tasks/008-lazy-loaded-agent-context.md",
+      "branch": "codex/008-lazy-loaded-agent-context",
+      "pr": 14
     }
   ]
 }

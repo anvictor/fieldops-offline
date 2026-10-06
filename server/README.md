@@ -9,7 +9,7 @@ Use Node.js 20.19+ and Docker Compose v2. From the repository root:
 ```sh
 npm ci
 npm --prefix server ci
-cp server/.env.example server/.env
+test -e server/.env || cp server/.env.example server/.env
 ```
 
 Edit `server/.env`: choose a local database password and put its URL-encoded value in `DATABASE_URL`. These are local development credentials only; `.env` is ignored. Keep real credentials out of commits. The API binds to `127.0.0.1:3001` by default; PostgreSQL binds to loopback port 5432. `HOST`, `PORT`, `DATABASE_URL`, and the Compose `POSTGRES_*` variables configure them.
@@ -70,7 +70,7 @@ docker compose --env-file server/.env -f server/compose.yaml exec postgres \
 
 Set `TEST_DATABASE_URL` in `server/.env` to that database, then run `npm run server:test`. Tests fail rather than skip if it is absent. Each run creates and removes a uniquely named schema; never point tests at a production database. Tests cover migration reruns, CRUD, persistence through a fresh app/pool, validation, missing resources, malformed/oversized bodies, SQL-like input, and safe database failure responses. The deliberate database failure emits one generic server error log.
 
-No coverage percentage is configured. `*.test.ts` uses Node's test runner through `tsx`; no frontend test framework is added.
+No coverage percentage is configured. Backend `*.test.ts` uses Node's test runner through `tsx`. The frontend has a separate Vitest synchronization suite in `tests/sync.test.ts`, run from the root with `npm test`.
 
 ## Deployment boundary
 

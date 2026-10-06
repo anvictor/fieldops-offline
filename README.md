@@ -48,4 +48,4 @@ npm test
 npm run server:test  # requires disposable PostgreSQL TEST_DATABASE_URL
 ```
 
-Vitest runs deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. See [task registry conventions](docs/tasks/README.md) for review and completion gates.
+Vitest runs deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. Agent contributors start at [AGENTS.md](AGENTS.md); task identity and lifecycle are documented in [task registry conventions](docs/tasks/README.md).

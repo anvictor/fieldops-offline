@@ -59,3 +59,14 @@ Record commands, outcomes and material limitations honestly. Before merge all
 available gates and CI must pass along with reviews and acceptance criteria.
 User-directed no-merge tasks stop with the PR open; green CI is not evidence of
 post-merge deployment/live verification or registry completion.
+
+## Exact-head merge evidence
+
+Before merge, compare the current PR head, Agent B's persisted approval SHA and
+required CI evidence: all must identify the same exact final head. Inspect the
+GitHub run/check status and SHA; do not claim a check passed without that evidence.
+Any head change invalidates implementation or reconciliation approval; obtain
+Agent B re-review and successful required CI for the new head before merging.
+A prior green run or chat-only review summary is insufficient. Use the
+[workflow procedure](workflow.md#independent-review-evidence) when verifying review
+attribution and permalinks. This documents a manual gate, not new CI automation.

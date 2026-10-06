@@ -63,6 +63,13 @@
       "spec": "docs/tasks/009-persist-review-evidence.md",
       "branch": "codex/009-persist-review-evidence",
       "pr": 17
+    },
+    {
+      "id": "TASK-010",
+      "status": "draft",
+      "spec": "docs/tasks/010-production-api-foundation.md",
+      "branch": "codex/010-production-api-foundation",
+      "pr": null
     }
   ]
 }

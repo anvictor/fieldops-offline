@@ -66,10 +66,10 @@
     },
     {
       "id": "TASK-010",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/010-production-api-foundation.md",
       "branch": "codex/010-production-api-foundation",
-      "pr": null
+      "pr": 20
     }
   ]
 }

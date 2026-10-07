@@ -94,7 +94,7 @@
     },
     {
       "id": "TASK-014",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/014-deployed-pwa-smoke.md",
       "branch": "codex/014-deployed-pwa-smoke",
       "pr": 31

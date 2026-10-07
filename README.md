@@ -32,6 +32,16 @@ Synchronization attempts occur on online startup, reconnect, online local mutati
 
 If Web Locks is unavailable, synchronization stays disabled and offline CRUD continues. Close old app tabs if a database upgrade is blocked. New titles are trimmed and limited to 1–200 Unicode characters without null characters.
 
+## Edit inspection titles
+
+Select **Edit title** on an inspection, change the name and select **Save title**
+(or press Enter). **Cancel** leaves the record unchanged. Names are trimmed and
+must contain 1–200 Unicode characters with no null character; saving the same
+normalized name creates no pending operation. Editing works offline, preserves
+identity and status, and persists before updating the displayed title. If saving
+fails, the editor keeps your input for retry. Changed names use the existing
+ordered synchronization queue and its one-logical-writer limitations described above.
+
 ## Export inspections
 
 Select **Export inspections** to download a JSON copy of all inspections currently

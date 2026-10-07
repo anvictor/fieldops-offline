@@ -1,8 +1,9 @@
 import "./App.css";
+import { renameInspection } from "./inspections";
 import { exportInspections } from "./export";
 import { normalizeTitle, resolveApiConfig } from "./api";
 import { createSyncManager } from "./sync";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
@@ -24,6 +25,7 @@ type InspectionCardProps = {
   status: InspectionStatus;
   onToggleStatus: () => void;
   onDelete: () => void;
+  onRename: (title: string) => Promise<void>;
 };
 
 function InspectionCard({
@@ -31,20 +33,53 @@ function InspectionCard({
   status,
   onToggleStatus,
   onDelete,
+  onRename,
 }: InspectionCardProps) {
+  const inputId = useId();
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const validTitle = normalizeTitle(draftTitle);
+
+  async function handleSave(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (saving || !validTitle) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onRename(draftTitle);
+      setEditing(false);
+    } catch {
+      setError("Could not save the title. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   return (
     <>
-      <h2>{title}</h2>
+      <h2>Card: {title}</h2>
       <p>
         Status:{" "}
         <strong className={status === "completed" ? "completed" : "draft"}>
           {status}
         </strong>
       </p>
-      <button onClick={onToggleStatus}>
+      {editing ? <form onSubmit={(event) => void handleSave(event)}>
+        <label htmlFor={inputId}>Inspection title</label>
+        <input id={inputId} value={draftTitle} disabled={saving}
+          onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
+        <button type="submit" disabled={saving || !validTitle}>Save title</button>
+        <button type="button" disabled={saving} onClick={() => { setEditing(false); setError(""); }}>Cancel</button>
+        {!validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
+        <div aria-live="polite">{saving && <p>Saving title…</p>}</div>
+        {error && <p role="alert">{error}</p>}
+      </form> : <button onClick={() => { setDraftTitle(title); setError(""); setEditing(true); }}>Edit title</button>}
+      <button disabled={saving} onClick={onToggleStatus}>
         {status === "draft" ? "Complete inspection" : "Reopen inspection"}
       </button>
-      <button onClick={onDelete}>Delete inspection</button>
+      <button disabled={saving} onClick={onDelete}>Delete inspection</button>
     </>
   );
 }
@@ -167,6 +202,12 @@ function App() {
     }
   }
 
+  async function changeInspectionTitle(id: string, title: string) {
+    const result = await renameInspection(id, title);
+    setInspections((items) => items.map((item) => item.id === id ? result.inspection : item));
+    if (result.changed && navigator.onLine) void sync.retry();
+  }
+
   async function handleExport() {
     setExporting(true);
     setExportMessage("");
@@ -255,10 +296,11 @@ function App() {
       {filteredInspections.map((inspection) => (
         <section key={inspection.id}>
           <InspectionCard
-            title={`Card: ${inspection.title}`}
+            title={inspection.title}
             status={inspection.status}
             onToggleStatus={() => toggleInspectionStatus(inspection.id)}
             onDelete={() => deleteInspection(inspection.id)}
+            onRename={(title) => changeInspectionTitle(inspection.id, title)}
           />
         </section>
       ))}

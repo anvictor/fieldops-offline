@@ -80,7 +80,7 @@
     },
     {
       "id": "TASK-012",
-      "status": "draft",
+      "status": "in_progress",
       "spec": "docs/tasks/012-edit-inspection-title.md",
       "branch": "codex/012-edit-inspection-title",
       "pr": null

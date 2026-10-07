@@ -1,4 +1,5 @@
 import "./App.css";
+import { searchInspections } from "./search";
 import { renameInspection } from "./inspections";
 import { exportInspections } from "./export";
 import { normalizeTitle, resolveApiConfig } from "./api";
@@ -89,6 +90,7 @@ function App() {
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
   const [exportError, setExportError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | InspectionStatus>(
     "all",
@@ -240,10 +242,7 @@ function App() {
     (inspection) => inspection.status === "draft",
   ).length;
 
-  const filteredInspections =
-    statusFilter === "all"
-      ? inspections
-      : inspections.filter((inspection) => inspection.status === statusFilter);
+  const filteredInspections = searchInspections(inspections, searchQuery, statusFilter);
 
   return (
     <main>
@@ -256,6 +255,10 @@ function App() {
         {exportMessage && <p>{exportMessage}</p>}
       </div>
       {exportError && <p role="alert">{exportError}</p>}
+      <label htmlFor="inspection-search">Search inspections</label>
+      <input id="inspection-search" type="search" value={searchQuery}
+        onChange={(event) => setSearchQuery(event.target.value)} />
+      {searchQuery && <button onClick={() => setSearchQuery("")}>Clear search</button>}
       <select
         value={statusFilter}
         onChange={(event) =>
@@ -293,6 +296,10 @@ function App() {
         </button>
       </form>
       {newTitle && !validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
+      <div aria-live="polite">
+        {inspections.length > 0 && filteredInspections.length === 0 &&
+          <p>No inspections match your search and status filter.</p>}
+      </div>
       {filteredInspections.map((inspection) => (
         <section key={inspection.id}>
           <InspectionCard

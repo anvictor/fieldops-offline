@@ -1,4 +1,5 @@
 import "./App.css";
+import { ImportInspections } from "./ImportInspections";
 import { searchInspections } from "./search";
 import { renameInspection } from "./inspections";
 import { exportInspections } from "./export";
@@ -247,6 +248,10 @@ function App() {
   return (
     <main>
       <h1>FieldOps Offline</h1>
+      <ImportInspections onImported={async () => {
+        if (navigator.onLine) void sync.retry();
+        setInspections(await loadInspections());
+      }} />
       <button disabled={exporting} onClick={() => void handleExport()}>
         Export inspections
       </button>

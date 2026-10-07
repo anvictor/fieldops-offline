@@ -141,3 +141,60 @@ export async function removeQueueItem(id: string, signal: AbortSignal): Promise<
   }, signal);
   notifyQueueChanged();
 }
+
+// Imports use the same stores as ordinary mutations, with no schema change.
+// The shared transaction rechecks stored and pending IDs before any batch write.
+type ImportCounts = { imported: number; skipped: number };
+async function inspectionBatch(records: StoredInspection[], commit: boolean): Promise<ImportCounts> {
+  const snapshot = structuredClone(records);
+  const counts = await transaction<ImportCounts>(["inspections", "syncQueue", "syncMetadata"],
+    commit ? "readwrite" : "readonly", (tx, result) => {
+      const inspections = tx.objectStore("inspections");
+      const queue = tx.objectStore("syncQueue");
+      const stored = inspections.getAll();
+      stored.onsuccess = () => {
+        const reserved = new Set<string>(stored.result.map((record: StoredInspection) => record.id.toLowerCase()));
+        const pending = queue.getAll();
+        pending.onsuccess = () => {
+          for (const item of pending.result as SyncQueueItem[]) {
+            if (typeof item.entityId === "string") reserved.add(item.entityId.toLowerCase());
+          }
+          const candidates = snapshot.filter(record => {
+            const id = record.id.toLowerCase();
+            if (reserved.has(id)) return false;
+            reserved.add(id); return true;
+          });
+          result({ imported: candidates.length, skipped: snapshot.length - candidates.length });
+          if (!commit || candidates.length === 0) return;
+          const metadata = tx.objectStore("syncMetadata");
+          const next = metadata.get("nextSequence");
+          next.onsuccess = () => {
+            const sequence = next.result ?? 1;
+            if (!Number.isSafeInteger(sequence) || sequence < 1 ||
+                sequence > Number.MAX_SAFE_INTEGER - candidates.length) { tx.abort(); return; }
+            try {
+              candidates.forEach((record, index) => {
+                const item: SyncQueueItem = { id: crypto.randomUUID(), entityType: "inspection", entityId: record.id,
+                  operation: "CREATE", payload: structuredClone(record), createdAt: new Date().toISOString(),
+                  sequence: sequence + index };
+                inspections.add(record);
+                queue.add(item);
+              });
+              metadata.put(sequence + candidates.length, "nextSequence");
+            } catch { tx.abort(); }
+          };
+        };
+      };
+    });
+  if (commit && counts.imported > 0) {
+    try { notifyQueueChanged(); } catch { /* Durable commit succeeded; caller refreshes persisted state. */ }
+  }
+  return counts;
+}
+
+export function previewInspectionBatch(records: StoredInspection[]): Promise<ImportCounts> {
+  return inspectionBatch(records, false);
+}
+export function importInspectionBatch(records: StoredInspection[]): Promise<ImportCounts> {
+  return inspectionBatch(records, true);
+}

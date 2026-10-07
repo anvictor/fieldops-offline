@@ -94,7 +94,7 @@
     },
     {
       "id": "TASK-014",
-      "status": "draft",
+      "status": "in_progress",
       "spec": "docs/tasks/014-deployed-pwa-smoke.md",
       "branch": "codex/014-deployed-pwa-smoke",
       "pr": null

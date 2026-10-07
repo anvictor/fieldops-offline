@@ -87,7 +87,7 @@
     },
     {
       "id": "TASK-013",
-      "status": "draft",
+      "status": "in_progress",
       "spec": "docs/tasks/013-search-inspections.md",
       "branch": "codex/013-search-inspections",
       "pr": null

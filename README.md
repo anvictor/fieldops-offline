@@ -32,6 +32,16 @@ Synchronization attempts occur on online startup, reconnect, online local mutati
 
 If Web Locks is unavailable, synchronization stays disabled and offline CRUD continues. Close old app tabs if a database upgrade is blocked. New titles are trimmed and limited to 1–200 Unicode characters without null characters.
 
+## Search inspections
+
+Type in **Search inspections** to find titles by case-insensitive substring,
+combined with the selected All/Draft/Completed status. Query edges are trimmed;
+blank search matches all titles. Punctuation is literal and accents/diacritics are
+not removed. **Clear search** resets the query while keeping the status filter.
+The query lasts only for the open page; it is not saved after reload. Search works
+offline and changes only the visible list, preserving order and overall counts.
+Export always includes all persisted inspections, even when search hides them.
+
 ## Edit inspection titles
 
 Select **Edit title** on an inspection, change the name and select **Save title**

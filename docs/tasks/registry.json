@@ -73,10 +73,10 @@
     },
     {
       "id": "TASK-011",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/011-offline-inspection-export.md",
       "branch": "codex/011-offline-inspection-export",
-      "pr": null
+      "pr": 23
     }
   ]
 }

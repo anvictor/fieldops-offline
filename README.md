@@ -82,3 +82,40 @@ npm run server:test  # requires disposable PostgreSQL TEST_DATABASE_URL
 ```
 
 Vitest runs export snapshot/download tests in `tests/export.test.ts` and deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. Agent contributors start at [AGENTS.md](AGENTS.md); task identity and lifecycle are documented in [task registry conventions](docs/tasks/README.md).
+
+
+## Automated production PWA checks
+
+After each Pages deployment, GitHub Actions opens the **actual public site** in
+an isolated Chromium browser. It requires an uncached `build-info.json` matching
+the full deployed commit SHA before checking create/status/edit/reload, read-only
+search/export and cached offline CRUD/export. The generated marker is written
+into `dist/` after the build and stays outside the PWA precache.
+
+PR CI runs the same checks against its fresh loopback production build. To run locally:
+
+```sh
+npx playwright install chromium
+npm run build
+node scripts/write-build-info.mjs "$(git rev-parse HEAD)"
+npm run preview -- --host 127.0.0.1 --port 4173 --strictPort
+# In another terminal, from this repository:
+SMOKE_SITE_URL=http://127.0.0.1:4173/fieldops-offline/ SMOKE_EXPECTED_SHA="$(git rev-parse HEAD)" npm run test:live
+```
+
+For the deployed version, use the exact deployed SHA with
+`SMOKE_SITE_URL=https://anvictor.github.io/fieldops-offline/`. The development-only
+Playwright version is pinned; an explicit `SMOKE_BROWSER_EXECUTABLE` can select
+system Chromium for local validation. Loopback results do not prove hosted success.
+Both workflows retain synthetic screenshots and a compact `smoke-results/report.json`
+for seven days. Generated reports remain untracked.
+
+Fresh browser storage and pre-startup fetch/network guards prevent backend writes,
+including service-worker requests. A disposable loopback proof checks these guards
+before visiting the target. Only static same-origin GET requests within the PWA
+scope are allowed. No user cookies, owner tokens or real database are involved;
+API synchronization and the browser's online indicator are outside these checks.
+A failed uncached fetch proves offline transport while cached navigation proves
+the shell. Completion requires the **entire** deployment workflow, including smoke,
+to succeed. These are direct automated hosted live checks for covered scenarios;
+future behavior changes still require relevant tests and all review/merge gates.

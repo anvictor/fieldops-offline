@@ -91,6 +91,13 @@
       "spec": "docs/tasks/013-search-inspections.md",
       "branch": "codex/013-search-inspections",
       "pr": 28
+    },
+    {
+      "id": "TASK-014",
+      "status": "in_review",
+      "spec": "docs/tasks/014-deployed-pwa-smoke.md",
+      "branch": "codex/014-deployed-pwa-smoke",
+      "pr": 31
     }
   ]
 }

@@ -13,7 +13,8 @@
     "server:start": "npm --prefix server start",
     "server:migrate": "npm --prefix server run migrate",
     "server:test": "npm --prefix server test",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:live": "node scripts/deployed-smoke.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -30,6 +31,7 @@
     "eslint-plugin-react-refresh": "^0.5.4",
     "fake-indexeddb": "^6.2.5",
     "globals": "^17.11.0",
+    "playwright": "1.63.0",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.67.0",
     "vite": "^8.2.2",

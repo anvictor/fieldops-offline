@@ -11,6 +11,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     services:
       postgres:
@@ -60,3 +61,25 @@ jobs:
 
       - name: Backend PostgreSQL integration tests
         run: npm run server:test
+
+
+      - name: Install pinned Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Production preview browser smoke
+        shell: bash
+        run: |
+          node scripts/write-build-info.mjs "$GITHUB_SHA"
+          npm run preview -- --host 127.0.0.1 --port 4173 --strictPort > /tmp/fieldops-preview.log 2>&1 &
+          preview_pid=$!
+          trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
+          SMOKE_SITE_URL=http://127.0.0.1:4173/fieldops-offline/ SMOKE_EXPECTED_SHA="$GITHUB_SHA" npm run test:live
+
+      - name: Upload synthetic preview evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-pwa-smoke
+          path: smoke-results/
+          retention-days: 7
+          if-no-files-found: warn

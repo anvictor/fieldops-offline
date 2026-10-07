@@ -52,8 +52,8 @@ Real-browser tests complement deterministic tests; cover multi-tab coordination,
 Retry/Discard and browser Web Lock availability when synchronization changes.
 For PWA/deployment changes, load frontend context and CONVENTIONS via the root
 routes, verify shell caching after an initial visit, offline reopen and worker
-updates without losing forms. This documentation-only refactor changes no runtime
-behavior and does not require new browser scenarios or deployment before merge.
+updates without losing forms. Choose scenarios according to the active task; documentation-only work does not
+by itself require new runtime tests.
 
 Record commands, outcomes and material limitations honestly. Before merge all
 available gates and CI must pass along with reviews and acceptance criteria.
@@ -82,3 +82,25 @@ access and authenticated CRUD. Ports published locally must bind loopback.
 Do not print env/credentials, disable certificate verification or equate container
 smoke tests with a real hosted public deployment. Record hosting/TLS/client rollout
 prerequisites separately. CI runs backend tests; local Docker smoke is extra evidence.
+
+
+## Deployed PWA browser gate
+
+Read [README commands](../../README.md#automated-production-pwa-checks) for setup,
+local/hosted targets and limitations. `npm run test:live` uses pinned development
+Playwright/Chromium and requires `SMOKE_EXPECTED_SHA`. PR CI writes the generated
+marker after building and checks a loopback production preview; Pages adds the
+same smoke against its real deployment URL after deploy. Smoke has contents-read
+permissions only, no credentials, fresh synthetic storage and pre-startup API guards.
+The script first proves renderer and service-worker request isolation against a
+disposable loopback fixture. Inspect the report's target, expected/observed SHA,
+verdict and checks; preview evidence is not hosted evidence. The marker is not
+precached; bounded uncached retries fail on stale/malformed versions.
+
+For completion, inspect the whole Pages workflow for the exact merge SHA, including
+its deployed smoke job, and persist run/report outcomes in the implementation PR.
+Deployment-job success alone is insufficient. Artifacts contain synthetic screenshots
+and compact reports, retained seven days; no environment, headers or full traces.
+Covered hosted checks can provide direct live evidence; changed features require
+appropriate additional checks and root gates remain mandatory. Backend end-to-end
+sync, credential UX and browser connectivity indicator accuracy are not covered.

@@ -27,3 +27,6 @@ dist-ssr
 server/.env
 server/.env.*
 !server/.env.example
+
+# Synthetic browser smoke artifacts
+smoke-results/

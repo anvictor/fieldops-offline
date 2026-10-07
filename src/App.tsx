@@ -1,4 +1,5 @@
 import "./App.css";
+import { exportInspections } from "./export";
 import { normalizeTitle, resolveApiConfig } from "./api";
 import { createSyncManager } from "./sync";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -50,6 +51,9 @@ function InspectionCard({
 
 function App() {
   const [inspections, setInspections] = useState<Inspection[]>([]);
+  const [exporting, setExporting] = useState(false);
+  const [exportMessage, setExportMessage] = useState("");
+  const [exportError, setExportError] = useState("");
   const [newTitle, setNewTitle] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | InspectionStatus>(
     "all",
@@ -163,6 +167,20 @@ function App() {
     }
   }
 
+  async function handleExport() {
+    setExporting(true);
+    setExportMessage("");
+    setExportError("");
+    try {
+      await exportInspections();
+      setExportMessage("Download requested. Check your browser downloads.");
+    } catch {
+      setExportError("Could not export inspections. Please try again.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -189,6 +207,14 @@ function App() {
   return (
     <main>
       <h1>FieldOps Offline</h1>
+      <button disabled={exporting} onClick={() => void handleExport()}>
+        Export inspections
+      </button>
+      <div aria-live="polite">
+        {exporting && <p>Preparing export…</p>}
+        {exportMessage && <p>{exportMessage}</p>}
+      </div>
+      {exportError && <p role="alert">{exportError}</p>}
       <select
         value={statusFilter}
         onChange={(event) =>

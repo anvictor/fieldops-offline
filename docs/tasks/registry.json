@@ -70,6 +70,13 @@
       "spec": "docs/tasks/010-production-api-foundation.md",
       "branch": "codex/010-production-api-foundation",
       "pr": 20
+    },
+    {
+      "id": "TASK-011",
+      "status": "in_review",
+      "spec": "docs/tasks/011-offline-inspection-export.md",
+      "branch": "codex/011-offline-inspection-export",
+      "pr": 23
     }
   ]
 }

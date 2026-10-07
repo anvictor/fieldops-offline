@@ -80,14 +80,14 @@
     },
     {
       "id": "TASK-012",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/012-edit-inspection-title.md",
       "branch": "codex/012-edit-inspection-title",
       "pr": 26
     },
     {
       "id": "TASK-013",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/013-search-inspections.md",
       "branch": "codex/013-search-inspections",
       "pr": 28

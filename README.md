@@ -32,6 +32,19 @@ Synchronization attempts occur on online startup, reconnect, online local mutati
 
 If Web Locks is unavailable, synchronization stays disabled and offline CRUD continues. Close old app tabs if a database upgrade is blocked. New titles are trimmed and limited to 1–200 Unicode characters without null characters.
 
+## Export inspections
+
+Select **Export inspections** to download a JSON copy of all inspections currently
+stored in this browser, including draft and completed records regardless of the
+selected filter. Export works offline and reads persisted data again on each click.
+It leaves inspections and pending synchronization operations unchanged.
+
+The versioned file contains inspection IDs, titles and statuses plus its export time.
+It excludes the synchronization queue and is not a full database backup. Import or
+restore is not implemented. The file is plaintext and may contain private inspection
+titles; store and share it with care. The app requests a download; your browser may
+prompt, block or cancel saving. Check the browser downloads to confirm the file.
+
 ## Production configuration
 
 Without configuration, production builds (including GitHub Pages) keep pending operations locally and make no sync requests. Optionally provide `VITE_API_BASE_URL` at build time, e.g. `https://api.example.com` or `https://api.example.com/base`, **without `/api`**. HTTP(S) only; credentials, queries, fragments and invalid URLs are rejected. Trailing slashes are normalized, then sync appends `/api/inspections`. Development always uses the relative proxy.
@@ -48,4 +61,4 @@ npm test
 npm run server:test  # requires disposable PostgreSQL TEST_DATABASE_URL
 ```
 
-Vitest runs deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. Agent contributors start at [AGENTS.md](AGENTS.md); task identity and lifecycle are documented in [task registry conventions](docs/tasks/README.md).
+Vitest runs export snapshot/download tests in `tests/export.test.ts` and deterministic synchronization tests in `tests/sync.test.ts` with fake IndexedDB, simulated HTTP, clocks and a shared Web Lock model. Real-browser end-to-end verification complements these tests. The Node backend integration suite uses real PostgreSQL and isolated schemas. PR CI's existing `validate` job runs both suites plus lint/builds and a PostgreSQL 17 service. No coverage threshold is configured. Agent contributors start at [AGENTS.md](AGENTS.md); task identity and lifecycle are documented in [task registry conventions](docs/tasks/README.md).

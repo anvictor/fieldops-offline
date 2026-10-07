@@ -87,10 +87,10 @@
     },
     {
       "id": "TASK-013",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/013-search-inspections.md",
       "branch": "codex/013-search-inspections",
-      "pr": null
+      "pr": 28
     }
   ]
 }

@@ -4,6 +4,7 @@ import type { ErrorRequestHandler } from "express";
 import type { Pool } from "pg";
 import type { ApiSecurity } from "./config.js";
 import { securityMiddleware } from "./security.js";
+import { privateDemoRateLimit } from "./rate-limit.js";
 import { ApiError, inspectionId, inspectionInput } from "./validation.js";
 
 const columns = 'id, title, status, created_at AS "createdAt", updated_at AS "updatedAt"';
@@ -13,6 +14,7 @@ export function createApp(pool: Pool, security: ApiSecurity = { mode: "developme
   const app = express();
   app.disable("x-powered-by");
   app.use(securityMiddleware(security));
+  if (security.mode === "production") app.use(privateDemoRateLimit());
   app.use((req, _res, next) => {
     if (["POST", "PATCH"].includes(req.method) && !req.is("application/json")) {
       return next(new ApiError(415, "UNSUPPORTED_MEDIA_TYPE", "Use Content-Type: application/json."));

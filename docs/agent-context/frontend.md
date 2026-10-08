@@ -58,6 +58,5 @@ GitHub Pages deploys only the PWA, not Express/PostgreSQL. Development `/api`
 uses the Vite proxy to the loopback API. Production without valid build-time
 `VITE_API_BASE_URL` retains pending operations locally and makes no sync requests.
 The optional public HTTP(S) base excludes `/api`, credentials, query and fragment;
-trailing slashes normalize. It is public configuration, never a secret. A valid
-URL supplies no hosting, CORS, authentication, reachability or HTTPS guarantee.
+trailing slashes normalize. It is public configuration, never a secret. A valid URL supplies no hosting/CORS/reachability guarantee. Production owner synchronization requires a configured HTTPS base and runtime token entered in the PWA. The token lives only in tab memory, clears on disconnect/reload, and never enters IndexedDB, queue payloads, browser durable storage or build assets. Connect resumes FIFO; Disconnect aborts active work without dropping queued items; auth failures do not enable Discard. Each tab connects separately.
 Read [CONVENTIONS.md](../../CONVENTIONS.md) for deployment decisions and live checks.

@@ -30,3 +30,4 @@ server/.env.*
 
 # Synthetic browser smoke artifacts
 smoke-results/
+.render-output/

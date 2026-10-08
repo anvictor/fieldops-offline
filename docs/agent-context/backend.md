@@ -16,8 +16,7 @@ Preserve existing ignored `server/.env`; copy the example only when absent.
 Never commit or print real credentials. URL-encode local database passwords.
 The unauthenticated development API must remain on loopback (`127.0.0.1:3001`
 by default); PostgreSQL Compose also binds loopback. Production mode adds private owner-token authorization and explicit HTTPS-origin
-CORS; public hosting, frontend credential UX, per-user isolation, pagination and
-full operational hardening remain separate rollout work.
+CORS; Render/Neon rollout and the reviewed owner-entry UX are described in docs/render-neon-deployment.md. Per-user isolation, pagination and full operational hardening remain outside this private demo.
 Pages deploys only the PWA and does not run server startup or migrations.
 
 Migrations execute explicitly in filename order, transactionally with a ledger

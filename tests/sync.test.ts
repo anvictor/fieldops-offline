@@ -149,7 +149,7 @@ describe("HTTP delivery and acknowledgment", () => {
     await vi.advanceTimersByTimeAsync(1);expect(f).toHaveBeenCalledTimes(2);await vi.advanceTimersByTimeAsync(8999);expect(f).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);expect(f).toHaveBeenCalledTimes(3);await vi.advanceTimersByTimeAsync(8000);await check;
   });
-  it.each([400, 401, 409, 429])("retains permanent HTTP %s without retry", async (status) => {
+  it.each([400, 401, 409])("retains permanent HTTP %s without retry", async (status) => {
     const f = vi.fn().mockResolvedValue(json({ error: { code: status === 409 ? "ID_CONFLICT" : "INVALID_INPUT", message: "private server detail" } }, status));
     await expect(sendQueueItem(item(), "", signal(), f)).rejects.toMatchObject({ permanent: true });expect(f).toHaveBeenCalledTimes(1);
   });

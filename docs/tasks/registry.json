@@ -105,6 +105,13 @@
       "spec": "docs/tasks/015-offline-inspection-import.md",
       "branch": "codex/015-offline-inspection-import",
       "pr": 34
+    },
+    {
+      "id": "TASK-016",
+      "status": "in_review",
+      "spec": "docs/tasks/016-render-neon-sync.md",
+      "branch": "codex/016-render-neon-sync",
+      "pr": 36
     }
   ]
 }

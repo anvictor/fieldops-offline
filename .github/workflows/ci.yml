@@ -83,3 +83,22 @@ jobs:
           path: smoke-results/
           retention-days: 7
           if-no-files-found: warn
+
+      - name: Build authenticated browser fixture
+        run: npm run build
+        env:
+          VITE_API_BASE_URL: https://api.fieldops.test
+
+      - name: Authenticated browser to disposable PostgreSQL
+        run: node scripts/auth-browser-smoke.mjs
+
+      - name: Upload secret-free auth browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-browser-smoke
+          path: |
+            smoke-results/auth-browser-report.json
+            smoke-results/owner-connection.png
+          retention-days: 7
+          if-no-files-found: warn

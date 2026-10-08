@@ -240,7 +240,9 @@ try {
       });
     };
   });
-  const delayed = { ...file, name: "synthetic-delayed.json" };
+  const delayed = { ...file, name: "synthetic-delayed.json", buffer: Buffer.from(JSON.stringify({
+    ...source, inspections: [{ ...imported, title: "Stale must not replace the newer preview" }],
+  })) };
   await upload.setInputFiles(delayed);
   await page.getByText("Reading import…", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Cancel import", exact: true }).click();

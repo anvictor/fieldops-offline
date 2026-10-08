@@ -26,7 +26,7 @@ export function OwnerConnection({ connected, available, unavailableReason, conne
     });
   }
 
-  return <section aria-label="Private synchronization">
+  return <aside aria-label="Private synchronization">
     <h2>Private synchronization</h2>
     <p>Connecting sends pending inspections to your configured API. The owner token grants access to all inspections on that API; keep it private.</p>
     <p>The token stays in this tab’s memory. Reloading or disconnecting clears it. Local inspections stay on this device.</p>
@@ -42,5 +42,5 @@ export function OwnerConnection({ connected, available, unavailableReason, conne
     {!available && <p>{unavailableReason ?? "Secure API synchronization is not configured. You can keep working offline."}</p>}
     {error && <p role="alert">{error}</p>}
     <p>Disconnect stops new requests. A request already received by the API may still complete.</p>
-  </section>;
+  </aside>;
 }

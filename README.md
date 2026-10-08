@@ -60,10 +60,29 @@ selected filter. Export works offline and reads persisted data again on each cli
 It leaves inspections and pending synchronization operations unchanged.
 
 The versioned file contains inspection IDs, titles and statuses plus its export time.
-It excludes the synchronization queue and is not a full database backup. Import or
-restore is not implemented. The file is plaintext and may contain private inspection
+It excludes the synchronization queue and is not a full database backup. The file is plaintext and may contain private inspection
 titles; store and share it with care. The app requests a download; your browser may
 prompt, block or cancel saving. Check the browser downloads to confirm the file.
+
+## Import inspections
+
+Choose a JSON file using **Import inspections**. The preview shows total/new/skipped
+counts and up to five titles/statuses; nothing is saved until you select
+**Import new inspections**. **Cancel import** leaves local data unchanged.
+
+Only FieldOps version 1 exports are accepted, up to 2 MiB and 1000 inspections.
+Invalid metadata/records or repeated IDs within a file reject the whole file.
+Titles are trimmed using the normal title limits; UUIDs normalize to lowercase.
+Existing IDs and IDs with pending synchronization operations (including deletion)
+are skipped, never overwritten. Counts are checked again atomically when saving
+so another tab cannot cause duplicate imports. All new records and their ordered
+CREATE queue entries commit together; storage failure adds nothing and permits retry.
+
+Import works offline and preserves new inspection identity/status. Re-importing
+adds no duplicates. This restores inspections, not historical queue/server state;
+it does not resolve remote ID conflicts. Existing replay, one-writer and public API
+configuration limits above still apply. The file itself is read locally, not uploaded;
+new records enter the normal synchronization queue and may replay to a configured API.
 
 ## Production configuration
 
@@ -89,7 +108,7 @@ Vitest runs export snapshot/download tests in `tests/export.test.ts` and determi
 After each Pages deployment, GitHub Actions opens the **actual public site** in
 an isolated Chromium browser. It requires an uncached `build-info.json` matching
 the full deployed commit SHA before checking create/status/edit/reload, read-only
-search/export and cached offline CRUD/export. The generated marker is written
+search/export, cached offline CRUD/export and safe JSON import. The generated marker is written
 into `dist/` after the build and stays outside the PWA precache.
 
 PR CI runs the same checks against its fresh loopback production build. To run locally:

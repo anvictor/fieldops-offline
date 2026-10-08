@@ -98,6 +98,13 @@
       "spec": "docs/tasks/014-deployed-pwa-smoke.md",
       "branch": "codex/014-deployed-pwa-smoke",
       "pr": 31
+    },
+    {
+      "id": "TASK-015",
+      "status": "in_review",
+      "spec": "docs/tasks/015-offline-inspection-import.md",
+      "branch": "codex/015-offline-inspection-import",
+      "pr": 34
     }
   ]
 }

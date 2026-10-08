@@ -219,6 +219,83 @@ try {
   assert.deepEqual((await snapshot()).inspections, before.inspections);
   assert.equal(pageErrors, 0);
   checks.push("cached PWA offline reopen/create/status/delete/reload/export; uncached transport fails; no page errors");
+  phase = "offline JSON import";
+  const beforeImport = await snapshot();
+  const upload = page.getByLabel("Import inspections", { exact: true });
+  await upload.setInputFiles({ name: "synthetic-invalid.json", mimeType: "application/json", buffer: Buffer.from("{invalid") });
+  await page.getByText("Could not preview this file. Use a valid FieldOps version 1 export, up to 2 MiB and 1000 inspections.", { exact: true }).waitFor();
+  assert.deepEqual(await snapshot(), beforeImport);
+  const imported = { id: "00000000-0000-4000-8000-000000000015", title: "Smoke Imported", status: "completed" };
+  const source = { format: "fieldops-inspections", schemaVersion: 1, exportedAt: new Date().toISOString(),
+    inspections: [{ ...beforeImport.inspections[0], title: "Must not overwrite" }, imported] };
+  const file = { name: "synthetic-import.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(source)) };
+  // Control delayed reads to test Cancel and replacement without timing guesses.
+  await page.evaluate(() => {
+    const original = File.prototype.text;
+    window.__smokeRestoreRead = () => { File.prototype.text = original; };
+    File.prototype.text = function() {
+      if (this.name !== "synthetic-delayed.json") return original.call(this);
+      return new Promise(resolve => {
+        window.__smokeReleaseRead = async () => resolve(await original.call(this));
+      });
+    };
+  });
+  const delayed = { ...file, name: "synthetic-delayed.json", buffer: Buffer.from(JSON.stringify({
+    ...source, inspections: [{ ...imported, title: "Stale must not replace the newer preview" }],
+  })) };
+  await upload.setInputFiles(delayed);
+  await page.getByText("Reading import…", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Cancel import", exact: true }).click();
+  await page.evaluate(async () => { await window.__smokeReleaseRead(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.equal(await page.getByRole("button", { name: "Import new inspections", exact: true }).count(), 0);
+  await upload.setInputFiles(delayed);
+  await page.getByText("Reading import…", { exact: true }).waitFor();
+  await upload.setInputFiles(file);
+  await page.getByText("Total: 2; new: 1; skipped: 1.", { exact: true }).waitFor();
+  await page.evaluate(async () => { await window.__smokeReleaseRead(); window.__smokeRestoreRead(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  await page.getByText("Total: 2; new: 1; skipped: 1.", { exact: true }).waitFor();
+  assert.deepEqual(await snapshot(), beforeImport);
+  await page.screenshot({ path: "smoke-results/import-preview.png", fullPage: true });
+  await page.getByRole("button", { name: "Cancel import", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "Import new inspections", exact: true }).count(), 0);
+  assert.deepEqual(await snapshot(), beforeImport);
+  await upload.setInputFiles(file);
+  await page.getByText("Total: 2; new: 1; skipped: 1.", { exact: true }).waitFor();
+  await page.evaluate(() => {
+    const original = IDBObjectStore.prototype.add;
+    window.__smokeRestoreWrite = () => { IDBObjectStore.prototype.add = original; };
+    IDBObjectStore.prototype.add = function(value, key) {
+      if (this.name === "syncQueue") throw new Error("Synthetic storage fault");
+      return original.call(this, value, key);
+    };
+  });
+  await page.getByRole("button", { name: "Import new inspections", exact: true }).click();
+  await page.getByText("Could not save the import. No records were added. Please try again.", { exact: true }).waitFor();
+  assert.deepEqual(await snapshot(), beforeImport);
+  await page.getByText("Total: 2; new: 1; skipped: 1.", { exact: true }).waitFor();
+  await page.evaluate(() => window.__smokeRestoreWrite());
+  await page.getByRole("button", { name: "Import new inspections", exact: true }).evaluate(button => { button.click(); button.click(); });
+  await page.getByText("Imported 1; skipped 1.", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "Card: Smoke Imported", exact: true }).waitFor();
+  await page.reload();
+  await page.getByRole("heading", { name: "Card: Smoke Imported", exact: true }).waitFor();
+  const afterImport = await snapshot();
+  assert.deepEqual(afterImport.inspections.find(item => item.id === imported.id), imported);
+  assert.deepEqual(afterImport.inspections.filter(item => item.id !== imported.id), beforeImport.inspections);
+  const oldIds = new Set(beforeImport.syncQueue.map(item => item.id));
+  assert.deepEqual(afterImport.syncQueue.filter(item => oldIds.has(item.id)), beforeImport.syncQueue);
+  const addedQueue = afterImport.syncQueue.filter(item => !oldIds.has(item.id));
+  assert.equal(addedQueue.length, 1);
+  assert.deepEqual(addedQueue[0].payload, imported);
+  assert.equal(addedQueue[0].operation, "CREATE");
+  await downloadAll(afterImport.inspections);
+  await upload.setInputFiles(file);
+  await page.getByText("Total: 2; new: 0; skipped: 2.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "Import new inspections", exact: true }).isDisabled(), true);
+  assert.deepEqual(await snapshot(), afterImport);
+  await page.getByRole("button", { name: "Cancel import", exact: true }).click();
+  assert.equal(pageErrors, 0);
+  checks.push("offline JSON import: invalid/preview/Cancel/stale-read isolation; conflict skip; failure rollback/retry/double submit; atomic CREATE; reload/re-export/repeat no-op");
   await page.screenshot({ path: "smoke-results/site.png", fullPage: true });
   report.verdict = "PASS";
 } catch {

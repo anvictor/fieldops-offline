@@ -101,7 +101,7 @@
     },
     {
       "id": "TASK-015",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/015-offline-inspection-import.md",
       "branch": "codex/015-offline-inspection-import",
       "pr": 34

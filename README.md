@@ -1,6 +1,6 @@
 # FieldOps Offline
 
-An offline-first React/TypeScript inspection PWA. Inspections and queued mutations live in IndexedDB; a separate Express/PostgreSQL API supports local-development synchronization. GitHub Pages hosts only the PWA, not a public backend.
+An offline-first React/TypeScript inspection PWA. Inspections and queued mutations live in IndexedDB; a separate Express/PostgreSQL API supports local-development and private owner synchronization. GitHub Pages hosts the PWA. Render/Neon deployment and private owner synchronization are described in [the deployment guide](docs/render-neon-deployment.md).
 
 ## Local development
 
@@ -18,7 +18,7 @@ npm run server:dev  # API at 127.0.0.1:3001
 npm run dev        # open the printed /fieldops-offline/ URL
 ```
 
-Vite proxies relative `/api` requests to `http://127.0.0.1:3001`. The API and PWA remain separate applications. Do not expose this unauthenticated development API publicly. A separately configured production API foundation supports a private owner token and explicit CORS; see [production setup](server/README.md#production-api-foundation). It is not an already hosted backend or multi-user login.
+Vite proxies relative `/api` requests to `http://127.0.0.1:3001`. The API and PWA remain separate applications. Do not expose this unauthenticated development API publicly. A separately configured production API foundation supports a private owner token and explicit CORS; see [production setup](server/README.md#production-api-foundation). Production browser synchronization uses an owner token entered at runtime and held only in this tab’s memory. It is not multi-user login.
 
 ## How synchronization works
 
@@ -88,7 +88,9 @@ new records enter the normal synchronization queue and may replay to a configure
 
 Without configuration, production builds (including GitHub Pages) keep pending operations locally and make no sync requests. Optionally provide `VITE_API_BASE_URL` at build time, e.g. `https://api.example.com` or `https://api.example.com/base`, **without `/api`**. HTTP(S) only; credentials, queries, fragments and invalid URLs are rejected. Trailing slashes are normalized, then sync appends `/api/inspections`. Development always uses the relative proxy.
 
-The variable is public build configuration, not a secret. A valid URL does not establish backend reachability, CORS permission, HTTPS compatibility, authentication or hosting. This task does not configure public backend hosting or CORS. The PWA caching strategy and Pages deployment are unchanged.
+Production synchronization also requires entering the private owner token in the PWA. It stays in memory, clears on reload/disconnect, and is never part of the build or offline data. Without it, pending operations stay local.
+
+The variable is public build configuration, not a secret. A valid URL does not establish backend reachability, CORS permission, HTTPS compatibility, authentication or hosting. Hosting and CORS configuration are documented in [the deployment guide](docs/render-neon-deployment.md). The PWA caching strategy and Pages deployment are unchanged.
 
 ## Validation
 

@@ -1,18 +1,20 @@
 import { loadSyncQueue, removeQueueItem, subscribeQueueChanges } from "./db";
 import type { SyncQueueItem } from "./db";
-import { sendQueueItem, SyncFailure } from "./api";
+import { sendQueueItem, SyncFailure, AuthenticationFailure } from "./api";
 import type { ApiConfig } from "./api";
 
 export const SYNC_LOCK = "fieldops-inspection-sync";
 export type SyncState = {
+  connected: boolean;
   pendingCount: number;
   syncing: boolean;
   unavailable: string | null;
-  error: { message: string; permanent: boolean; itemId: string | null } | null;
+  error: { message: string; permanent: boolean; itemId: string | null; authentication?: boolean } | null;
 };
 // Dependencies make the coordinator testable without replacing its lock/abort lifecycle.
 type Options = {
   config: ApiConfig;
+  requireCredential?: boolean;
   locks: Pick<LockManager, "request"> | undefined;
   online: () => boolean;
   load?: typeof loadSyncQueue;
@@ -25,8 +27,12 @@ export function createSyncManager(options: Options) {
   const load = options.load ?? loadSyncQueue;
   const remove = options.remove ?? removeQueueItem;
   const send = options.send ?? sendQueueItem;
-  let state: SyncState = { pendingCount: 0, syncing: false, error: null,
-    unavailable: !options.locks ? "Synchronization unavailable in this browser" : options.config.reason };
+  let token: string | null = null;
+  let credentialVersion = 0;
+  const configurationReason = !options.locks ? "Synchronization unavailable in this browser" : options.config.reason;
+  const disconnected = "Connect with your owner token to synchronize pending operations.";
+  let state: SyncState = { connected: false, pendingCount: 0, syncing: false, error: null,
+    unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) };
   const listeners = new Set<() => void>();
   const publish = (update: Partial<SyncState>) => {
     state = { ...state, ...update };
@@ -73,7 +79,7 @@ export function createSyncManager(options: Options) {
           item = (await load())[0];
           signal.throwIfAborted();
           if (!item) break;
-          await send(item, options.config.base!, signal);
+          await send(item, options.config.base!, signal, undefined, options.requireCredential ? () => token : undefined);
           signal.throwIfAborted();
           await remove(item.id, signal);
           await refresh(owner);
@@ -83,6 +89,7 @@ export function createSyncManager(options: Options) {
           message: error instanceof SyncFailure ? error.message : "Could not confirm the local queue update. Retry safely.",
           permanent: error instanceof SyncFailure && error.permanent,
           itemId: item?.id ?? null,
+          authentication: error instanceof AuthenticationFailure,
         } });
       } finally {
         if (isCurrent(owner)) { publish({ syncing: false }); await refresh(owner); }
@@ -103,6 +110,18 @@ export function createSyncManager(options: Options) {
 
   return {
     getSnapshot: () => state,
+    async setCredential(value: string | null) {
+      if (!options.requireCredential) return false;
+      if (value !== null && (!/^[A-Za-z0-9_-]{43,128}$/.test(value) || configurationReason || !options.config.base?.startsWith("https://"))) return false;
+      const version = ++credentialVersion;
+      runController?.abort();
+      rerun = false;
+      token = value;
+      publish({ connected: value !== null, error: null, unavailable: configurationReason ?? (value ? null : disconnected) });
+      if (active) await active;
+      if (version === credentialVersion && token) await trigger();
+      return true;
+    },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     start() {
       lifetime.abort();
@@ -116,7 +135,7 @@ export function createSyncManager(options: Options) {
       void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
     },
     // Keep active until the lock request settles: abort does not release a held Web Lock.
-    stop() { lifetime.abort(); unsubscribe?.(); rerun = false; publish({ syncing: false }); },
+    stop() { lifetime.abort(); unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
     pause() { runController?.abort(); },
     trigger,
     async retry() {
@@ -129,7 +148,7 @@ export function createSyncManager(options: Options) {
     },
     async discard(confirm: (message: string) => boolean) {
       const blocked = state.error;
-      if (!blocked?.permanent || !blocked.itemId || !options.locks || lifetime.signal.aborted) return;
+      if (blocked?.authentication || !blocked?.permanent || !blocked.itemId || !options.locks || lifetime.signal.aborted) return;
       if (!confirm("Discard this blocked queue operation? Local inspection data will stay unchanged. Discarding CREATE may leave later UPDATE/DELETE operations blocked.")) return;
       const signal = lifetime.signal;
       try {

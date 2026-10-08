@@ -4,7 +4,7 @@
 Deploy FieldOps to Render My Workspace (tea-d4rfaaq4d50c73euibc0), with PostgreSQL in Neon, and directly verify PWA → protected API → PostgreSQL synchronization. The user's 2026-10-08 instruction authorizes implementation, all review/validation gates, and deployment. Never create paid resources without separate consent.
 
 ## Architecture and scope
-Retain the existing single-owner bearer-token API and pg driver. Deploy a free Render Node API in Frankfurt and a Render static PWA preserving /fieldops-offline/. Existing Pages deployment remains available and its scope unchanged. Use the user's selected Neon project only after confirming a free plan or obtaining consent; create an isolated FieldOps branch/database when necessary, without modifying unrelated data. No Render Postgres, Redis, workers, Neon Auth or per-user login are required.
+Retain the existing single-owner bearer-token API and pg driver. Deploy a free Render Node API in Ohio alongside the selected Neon region and a Render static PWA preserving /fieldops-offline/. Existing Pages deployment remains available and its scope unchanged. Use the user's selected Neon project only after confirming a free plan or obtaining consent; create an isolated FieldOps branch/database when necessary, without modifying unrelated data. No Render Postgres, Redis, workers, Neon Auth or per-user login are required.
 
 ## Acceptance criteria
 1. Production PWA has an accessible password-field owner-token form with explicit Connect and Disconnect. Explain that connecting sends pending local operations to the configured API and that this is private single-owner access. Only a configured HTTPS API may receive the credential; no arbitrary credential target or redirect is allowed.
@@ -29,5 +29,6 @@ Must preserve src/db.ts/schema/queue payload semantics, applied server/migration
 
 ## Assumptions and unresolved prerequisites
 Current main ad65fc0546c97e0e9ae3f5fc3de745f7dd3a9d80 matches local; current registry 001–015 are done, no open PR or matching task-016 branch exists. Authentication remains one private owner token, not user accounts.
-Neon project ID and free-plan confirmation are pending; this blocks infrastructure mutation and production DB configuration, not generic reviewed client/config work. Credentials must come through secure tool/runtime settings; never ask the user to paste secrets in chat.
+User selected Neon project purple-union-67603644. Direct project inspection confirms owner anvictor0@gmail.com, subscription free_v3, region aws-us-east-2 and PostgreSQL 18. Use Render Ohio to colocate. Existing project default settings are not changed; create a dedicated FieldOps branch with a small scale-to-zero compute within Free quotas. Local/CI PostgreSQL 17 coverage must be complemented by direct hosted PostgreSQL 18 migration/CRUD checks. Credentials must come through secure tool/runtime settings; never ask the user to paste secrets in chat.
 Existing GitHub CLI authentication fails; use the connected anvictor GitHub tools for commits/PR/review evidence. If external authorization/access prevents any required gate, stop that dependent action and report the exact blocker.
+

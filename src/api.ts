@@ -24,6 +24,10 @@ export class SyncFailure extends Error {
   constructor(message: string, permanent: boolean) { super(message); this.permanent = permanent; }
 }
 
+export class AuthenticationFailure extends SyncFailure {
+  constructor(message: string) { super(message, true); }
+}
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const REQUEST_TIMEOUT = 8000;
 export const RETRY_DELAYS = [500, 1000];
@@ -39,7 +43,7 @@ export function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export async function sendQueueItem(item: SyncQueueItem, base: string, signal: AbortSignal,
-  fetcher: typeof fetch = fetch): Promise<void> {
+  fetcher: typeof fetch = fetch, credential?: () => string | null): Promise<void> {
   if (item.entityType !== "inspection" || !UUID.test(item.entityId) || !["CREATE", "UPDATE", "DELETE"].includes(item.operation)) {
     throw new SyncFailure("Invalid queued operation. Review or discard it to continue.", true);
   }
@@ -60,6 +64,10 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
 
   async function attempt() {
     signal.throwIfAborted();
+    const token = credential?.();
+    if (credential && (!token || !base.startsWith("https://"))) {
+      throw new AuthenticationFailure("Connect with an owner token to synchronize securely.");
+    }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let abort: () => void;
@@ -73,8 +81,14 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
     });
     try {
       await Promise.race([cancelled, (async () => {
-        const response = await fetcher(url, { method, headers: { "Content-Type": "application/json" }, body,
+        const response = await fetcher(url, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body,
           signal: controller.signal, redirect: "error" });
+        if (response.status === 401 || response.status === 403) {
+          throw new AuthenticationFailure(response.status === 401
+            ? "Owner token rejected. Disconnect and enter a valid token."
+            : "API access denied. Check the token and allowed site origin.");
+        }
+        if (response.status === 429) throw new SyncFailure("API request limit reached. Wait before retrying synchronization.", false);
         if (response.status >= 500 && response.status <= 599) throw new SyncFailure("API unavailable. Retry when available.", false);
         if (item.operation === "DELETE" && response.status === 204) return;
         const json = /^(application\/json)(;|$)/i.test(response.headers.get("content-type") ?? "");

@@ -1,0 +1,57 @@
+# External Neon PostgreSQL: no Render database or paid resource is provisioned.
+services:
+  - type: web
+    name: fieldops-api
+    runtime: node
+    plan: free
+    region: ohio
+    rootDir: server
+    autoDeployTrigger: checksPass
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: sh release.sh
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: API_MODE
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: API_TOKEN
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: MIGRATION_DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+  - type: web
+    name: fieldops-offline
+    runtime: static
+    autoDeployTrigger: checksPass
+    buildCommand: npm ci && npm run build && node scripts/render-static.mjs
+    staticPublishPath: dist/render
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: VITE_API_BASE_URL
+        sync: false
+    routes:
+      - type: redirect
+        source: /
+        destination: /fieldops-offline/
+      - type: rewrite
+        source: /fieldops-offline/*
+        destination: /fieldops-offline/index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /fieldops-offline/build-info.json
+        name: Cache-Control
+        value: no-store

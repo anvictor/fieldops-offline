@@ -1,4 +1,5 @@
 import "./App.css";
+import { OwnerConnection } from "./OwnerConnection";
 import { ImportInspections } from "./ImportInspections";
 import { searchInspections } from "./search";
 import { renameInspection } from "./inspections";
@@ -10,7 +11,6 @@ import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
   loadInspections,
-  loadSyncQueue,
   saveInspectionWithSync,
 } from "./db";
 
@@ -97,6 +97,7 @@ function App() {
     "all",
   );
   const [sync] = useState(() => createSyncManager({
+    requireCredential: !import.meta.env.DEV,
     config: resolveApiConfig(import.meta.env.DEV, import.meta.env.VITE_API_BASE_URL),
     locks: navigator.locks,
     online: () => navigator.onLine,
@@ -125,24 +126,6 @@ function App() {
   useEffect(() => {
     if (isOnline) void sync.retry(); else sync.pause();
   }, [isOnline, sync]);
-  useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.log("development mode, StrictMode may re-run effects");
-    } else {
-      console.log("prod mode");
-    }
-    async function handleOnline() {
-      const syncQueue = await loadSyncQueue();
-
-      console.log("Connection restored. Pending sync:", syncQueue);
-    }
-
-    window.addEventListener("online", handleOnline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-    };
-  }, []);
   async function toggleInspectionStatus(id: string) {
     const inspection = inspections.find((item) => item.id === id);
 
@@ -248,6 +231,10 @@ function App() {
   return (
     <main>
       <h1>FieldOps Offline</h1>
+      {!import.meta.env.DEV && <OwnerConnection connected={syncState.connected}
+        available={!!navigator.locks && !!resolveApiConfig(false, import.meta.env.VITE_API_BASE_URL).base?.startsWith("https://")}
+        unavailableReason={!navigator.locks ? "Synchronization is unavailable in this browser. You can keep working offline." : undefined}
+        connect={(token) => sync.setCredential(token)} />}
       <ImportInspections onImported={async () => {
         if (navigator.onLine) void sync.retry();
         setInspections(await loadInspections());
@@ -286,7 +273,7 @@ function App() {
       </div>
       <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}
         onClick={() => void sync.retry()}>Retry synchronization</button>
-      {syncState.error?.permanent && <button disabled={syncState.syncing || !!syncState.unavailable}
+      {syncState.error?.permanent && !syncState.error.authentication && <button disabled={syncState.syncing || !!syncState.unavailable}
         onClick={() => void sync.discard((message) => window.confirm(message))}>Discard blocked operation</button>}
       <p>Connection: {isOnline ? "Online" : "Offline"}</p>
       <form onSubmit={handleSubmit}>

@@ -74,7 +74,7 @@ No coverage percentage is configured. Backend `*.test.ts` uses Node's test runne
 
 ## Deployment boundary
 
-GitHub Pages continues to deploy only the existing PWA. The repository provides local setup and a production API foundation, not an already hosted public API. Hosted PR CI builds both applications and executes frontend synchronization tests plus the real-PostgreSQL backend suite. Unauthenticated mode is for loopback development only. Production owner authentication and CORS are described below; actual hosting, frontend credential UX, per-user authorization, pagination and full operational hardening remain rollout work.
+GitHub Pages continues to deploy only the existing PWA. The repository provides local setup and a production API foundation, not an already hosted public API. Hosted PR CI builds both applications and executes frontend synchronization tests plus the real-PostgreSQL backend suite. Unauthenticated mode is for loopback development only. Production owner authentication and CORS are described below; Render/Neon rollout and owner credential UX are described in [the deployment guide](../docs/render-neon-deployment.md); per-user authorization, pagination and full operational hardening remain outside this private demo.
 
 
 ## Production API foundation
@@ -114,10 +114,7 @@ no-store and nosniff headers. Existing REST/replay/safe-error semantics remain.
 
 Rotate the token by replacing its runtime secret and restarting instances together;
 old tokens immediately fail on updated instances. Do not put it in VITE_* variables,
-frontend source, IndexedDB, public files, image layers or URLs. Existing frontend
-has no credential-entry flow and cannot synchronize with this protected API yet;
-leave its production sync configuration disabled until a separately reviewed UX
-exists. Offline CRUD and the Pages/PWA build remain unchanged.
+frontend source, IndexedDB, public files, image layers or URLs. The frontend accepts the owner token through a runtime password field, keeps it only in tab memory and clears it on reload/disconnect. Configure an HTTPS VITE_API_BASE_URL to enable this reviewed flow; never place the token in build configuration. See [Render/Neon deployment](../docs/render-neon-deployment.md). Offline CRUD and the Pages/PWA scope remain unchanged.
 
 ## Container and hosted rollout checklist
 

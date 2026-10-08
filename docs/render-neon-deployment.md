@@ -14,7 +14,7 @@ and enable only Postgres. Create project. Copy the browser address of its dashbo
 or copy Project ID from Settings → General. These identify the project without
 revealing credentials. Never send the Connect connection string or passwords in chat.
 
-Selected project: `purple-union-67603644`, AWS Ohio (`aws-us-east-2`), PostgreSQL 18, observed `free_v3` subscription. Render API uses Ohio to colocate. This actual selection supersedes the generic Frankfurt/PostgreSQL 17 creation example above.
+Selected project: `purple-union-67603644`, AWS Ohio (`aws-us-east-2`), PostgreSQL 18, observed `free_v3` subscription. Render API uses Ohio to colocate. Dedicated branch `fieldops-render` uses fixed 0.25 CU and pooling. Custom suspend interval settings were rejected by Neon Free (HTTP 412); its observed endpoint metadata is 0. Retain the provider-managed policy and monitor included compute quota; no custom five-minute schedule or paid upgrade is claimed. This actual selection supersedes the generic Frankfurt/PostgreSQL 17 creation example above.
 
 Confirm actual plan/quotas before infrastructure changes. Use an isolated FieldOps
 branch/database; development and tests must not use production. Use Neon-provided

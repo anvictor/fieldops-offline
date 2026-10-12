@@ -115,7 +115,7 @@
     },
     {
       "id": "TASK-017",
-      "status": "in_review",
+      "status": "done",
       "spec": "docs/tasks/017-v1-polish.md",
       "branch": "codex/017-v1-polish",
       "pr": 38

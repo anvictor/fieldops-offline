@@ -112,6 +112,13 @@
       "spec": "docs/tasks/016-render-neon-sync.md",
       "branch": "codex/016-render-neon-sync",
       "pr": 36
+    },
+    {
+      "id": "TASK-017",
+      "status": "draft",
+      "spec": "docs/tasks/017-v1-polish.md",
+      "branch": "codex/017-v1-polish",
+      "pr": null
     }
   ]
 }

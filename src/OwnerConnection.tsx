@@ -26,8 +26,8 @@ export function OwnerConnection({ connected, available, unavailableReason, conne
     });
   }
 
-  return <aside aria-label="Private synchronization">
-    <h2>Private synchronization</h2>
+  return <aside className="owner-connection" aria-label="Private synchronization">
+    <h3>Private synchronization</h3>
     <p>Connecting sends pending inspections to your configured API. The owner token grants access to all inspections on that API; keep it private.</p>
     <p>The token stays in this tab’s memory. Reloading or disconnecting clears it. Local inspections stay on this device.</p>
     {connected ? <>

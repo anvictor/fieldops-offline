@@ -49,7 +49,7 @@ export function ImportInspections({ onImported }: { onImported: () => Promise<vo
       committing.current = false; setBusy(false);
     }
   }
-  return <aside aria-label="Inspection import">
+  return <aside className="inspection-import" aria-label="Inspection import">
     <label htmlFor={inputId}>Import inspections</label>
     <input id={inputId} type="file" accept=".json,application/json" disabled={busy}
       onChange={event => {

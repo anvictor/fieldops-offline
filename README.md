@@ -2,6 +2,31 @@
 
 An offline-first React/TypeScript inspection PWA. Inspections and queued mutations live in IndexedDB; a separate Express/PostgreSQL API supports local-development and private owner synchronization. GitHub Pages hosts the PWA. Render/Neon deployment and private owner synchronization are described in [the deployment guide](docs/render-neon-deployment.md).
 
+## v1 scope and demonstration
+
+FieldOps v1 is a compact single-owner inspection tool: create, edit, complete/reopen,
+delete, search/filter, JSON import/export, offline persistence and optional protected
+synchronization. The interface supports phone and desktop screens. The feature set
+is fixed for this release so the next stage can focus on understanding this code.
+
+- [Public offline demo on GitHub Pages](https://anvictor.github.io/fieldops-offline/)
+  works without an owner token. Its pending operations remain local.
+- [Render PWA](https://fieldops-offline.onrender.com/fieldops-offline/) also works
+  without a token; the owner can explicitly connect to the protected API.
+- [API health](https://fieldops-api-g9z6.onrender.com/api/health) is anonymous process
+  liveness, not proof of database readiness or synchronization.
+
+Follow the [3–5 minute v1 demo](docs/v1-demo.md). Use a fresh browser profile and
+synthetic inspection titles. No recruiter needs the private owner token.
+[Recorded authenticated browser → API → Neon verification](https://github.com/anvictor/fieldops-offline/pull/36#issuecomment-6127099422)
+is the historical backend evidence from TASK-016; each UI release records its own
+version and browser/deployment checks.
+
+v1 has one private owner principal, at-least-once queue delivery and one logical
+writer per inspection. There is no initial server download or multi-device conflict
+resolution. JSON export backs up local inspections, not the queue or whole server
+database. Free hosting may sleep. These boundaries are part of the demonstration.
+
 ## Local development
 
 Use Node.js 20.19+ and install both lockfiles:

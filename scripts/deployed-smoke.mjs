@@ -112,6 +112,25 @@ async function add(title) {
   await page.getByRole("heading", { name: "Card: " + title, exact: true }).waitFor();
 }
 
+async function checkMobileLayout() {
+  const original = page.viewportSize();
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 812 });
+    const layout = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      width: document.documentElement.scrollWidth,
+      controlsFit: [...document.querySelectorAll("button, input, select")].every(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.width === 0 || bounds.height === 0 || bounds.height >= 44;
+      }),
+    }));
+    assert.ok(layout.width <= layout.viewport, "Mobile page must not overflow horizontally.");
+    assert.ok(layout.controlsFit, "Visible controls must have 44px touch height.");
+  }
+  await page.screenshot({ path: "smoke-results/mobile.png", fullPage: true });
+  await page.setViewportSize(original);
+}
+
 async function downloadAll(expected) {
   const before = await snapshot();
   const pending = page.waitForEvent("download");
@@ -160,6 +179,23 @@ try {
   phase = "online persistence";
   await page.goto(target.href);
   await page.getByRole("heading", { name: "FieldOps Offline", exact: true }).waitFor();
+  phase = "mobile layout and keyboard creation";
+  const longTitle = "Smoke keyboard " + "x".repeat(180);
+  const titleInput = page.getByLabel("New inspection title", { exact: true });
+  await page.getByLabel("Status filter", { exact: true }).waitFor();
+  await titleInput.fill(longTitle);
+  await page.getByRole("button", { name: "Add inspection", exact: true }).waitFor();
+  await titleInput.focus();
+  await page.keyboard.press("Tab");
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Add inspection");
+  await page.keyboard.press("Enter");
+  const keyboardCard = page.locator("section").filter({ has: page.getByRole("heading", { name: "Card: " + longTitle, exact: true }) });
+  await keyboardCard.waitFor();
+  await checkMobileLayout();
+  await keyboardCard.getByRole("button", { name: "Delete inspection", exact: true }).click();
+  await keyboardCard.waitFor({ state: "detached" });
+  checks.push("320/375px layout and 44px controls; visible labels; keyboard CREATE and long-title wrapping");
+  phase = "online persistence";
   await add("Smoke Pump"); await add("Smoke Valve");
   const pump = page.locator("section").filter({ has: page.getByRole("heading", { name: "Card: Smoke Pump", exact: true }) });
   await pump.getByRole("button", { name: "Complete inspection", exact: true }).click();
@@ -225,10 +261,11 @@ try {
   await upload.setInputFiles({ name: "synthetic-invalid.json", mimeType: "application/json", buffer: Buffer.from("{invalid") });
   await page.getByText("Could not preview this file. Use a valid FieldOps version 1 export, up to 2 MiB and 1000 inspections.", { exact: true }).waitFor();
   assert.deepEqual(await snapshot(), beforeImport);
+  await checkMobileLayout();
   const imported = { id: "00000000-0000-4000-8000-000000000015", title: "Smoke Imported", status: "completed" };
   const source = { format: "fieldops-inspections", schemaVersion: 1, exportedAt: new Date().toISOString(),
     inspections: [{ ...beforeImport.inspections[0], title: "Must not overwrite" }, imported] };
-  const file = { name: "synthetic-import.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(source)) };
+  const file = { name: "synthetic-" + "x".repeat(160) + ".json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(source)) };
   // Control delayed reads to test Cancel and replacement without timing guesses.
   await page.evaluate(() => {
     const original = File.prototype.text;
@@ -255,6 +292,7 @@ try {
   await page.evaluate(async () => { await window.__smokeReleaseRead(); window.__smokeRestoreRead(); await new Promise(resolve => setTimeout(resolve, 0)); });
   await page.getByText("Total: 2; new: 1; skipped: 1.", { exact: true }).waitFor();
   assert.deepEqual(await snapshot(), beforeImport);
+  await checkMobileLayout();
   await page.screenshot({ path: "smoke-results/import-preview.png", fullPage: true });
   await page.getByRole("button", { name: "Cancel import", exact: true }).click();
   assert.equal(await page.getByRole("button", { name: "Import new inspections", exact: true }).count(), 0);
@@ -295,7 +333,7 @@ try {
   assert.deepEqual(await snapshot(), afterImport);
   await page.getByRole("button", { name: "Cancel import", exact: true }).click();
   assert.equal(pageErrors, 0);
-  checks.push("offline JSON import: invalid/preview/Cancel/stale-read isolation; conflict skip; failure rollback/retry/double submit; atomic CREATE; reload/re-export/repeat no-op");
+  checks.push("mobile long filename and error wrapping; offline JSON import: invalid/preview/Cancel/stale-read isolation; conflict skip; failure rollback/retry/double submit; atomic CREATE; reload/re-export/repeat no-op");
   await page.screenshot({ path: "smoke-results/site.png", fullPage: true });
   report.verdict = "PASS";
 } catch {

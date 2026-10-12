@@ -61,18 +61,18 @@ function InspectionCard({
 
   return (
     <>
-      <h2>Card: {title}</h2>
+      <h3>Card: {title}</h3>
       <p>
         Status:{" "}
         <strong className={status === "completed" ? "completed" : "draft"}>
           {status}
         </strong>
       </p>
-      {editing ? <form onSubmit={(event) => void handleSave(event)}>
+      {editing ? <form className="edit-form" onSubmit={(event) => void handleSave(event)}>
         <label htmlFor={inputId}>Inspection title</label>
         <input id={inputId} value={draftTitle} disabled={saving}
           onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
-        <button type="submit" disabled={saving || !validTitle}>Save title</button>
+        <button className="button-primary" type="submit" disabled={saving || !validTitle}>Save title</button>
         <button type="button" disabled={saving} onClick={() => { setEditing(false); setError(""); }}>Cancel</button>
         {!validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
         <div aria-live="polite">{saving && <p>Saving title…</p>}</div>
@@ -81,7 +81,7 @@ function InspectionCard({
       <button disabled={saving} onClick={onToggleStatus}>
         {status === "draft" ? "Complete inspection" : "Reopen inspection"}
       </button>
-      <button disabled={saving} onClick={onDelete}>Delete inspection</button>
+      <button className="button-danger" disabled={saving} onClick={onDelete}>Delete inspection</button>
     </>
   );
 }
@@ -229,80 +229,110 @@ function App() {
   const filteredInspections = searchInspections(inspections, searchQuery, statusFilter);
 
   return (
-    <main>
-      <h1>FieldOps Offline</h1>
-      {!import.meta.env.DEV && <OwnerConnection connected={syncState.connected}
-        available={!!navigator.locks && !!resolveApiConfig(false, import.meta.env.VITE_API_BASE_URL).base?.startsWith("https://")}
-        unavailableReason={!navigator.locks ? "Synchronization is unavailable in this browser. You can keep working offline." : undefined}
-        connect={(token) => sync.setCredential(token)} />}
-      <ImportInspections onImported={async () => {
-        if (navigator.onLine) void sync.retry();
-        setInspections(await loadInspections());
-      }} />
-      <button disabled={exporting} onClick={() => void handleExport()}>
-        Export inspections
-      </button>
-      <div aria-live="polite">
-        {exporting && <p>Preparing export…</p>}
-        {exportMessage && <p>{exportMessage}</p>}
-      </div>
-      {exportError && <p role="alert">{exportError}</p>}
-      <label htmlFor="inspection-search">Search inspections</label>
-      <input id="inspection-search" type="search" value={searchQuery}
-        onChange={(event) => setSearchQuery(event.target.value)} />
-      {searchQuery && <button onClick={() => setSearchQuery("")}>Clear search</button>}
-      <select
-        value={statusFilter}
-        onChange={(event) =>
-          setStatusFilter(event.target.value as "all" | InspectionStatus)
-        }
-      >
-        <option value="all">All</option>
-        <option value="draft">Draft</option>
-        <option value="completed">Completed</option>
-      </select>
-      <p>
-        Completed: {completedCount} / {inspections.length}
-      </p>
-      <p>Draft: {draftCount}</p>
-      <p>Pending sync: {syncState.pendingCount}</p>
-      <div aria-live="polite">
-        {syncState.syncing && <p>Synchronizing…</p>}
-        {syncState.unavailable && <p>{syncState.unavailable}</p>}
-        {syncState.error && <p role="alert">Synchronization error: {syncState.error.message}</p>}
-      </div>
-      <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}
-        onClick={() => void sync.retry()}>Retry synchronization</button>
-      {syncState.error?.permanent && !syncState.error.authentication && <button disabled={syncState.syncing || !!syncState.unavailable}
-        onClick={() => void sync.discard((message) => window.confirm(message))}>Discard blocked operation</button>}
-      <p>Connection: {isOnline ? "Online" : "Offline"}</p>
-      <form onSubmit={handleSubmit}>
-        <input
-          value={newTitle}
-          onChange={handleTitleChange}
-          placeholder="Inspection title"
-        />
+    <main className="app-shell">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">Inspection workspace</p>
+          <h1>FieldOps Offline</h1>
+          <p className="intro">Record inspections, keep working offline, and sync when you are ready.</p>
+        </div>
+        <p className="connection-status">Connection: {isOnline ? "Online" : "Offline"}</p>
+      </header>
 
-        <button type="submit" disabled={!validTitle}>
-          Add inspection
-        </button>
-      </form>
-      {newTitle && !validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
-      <div aria-live="polite">
-        {inspections.length > 0 && filteredInspections.length === 0 &&
-          <p>No inspections match your search and status filter.</p>}
+      <div className="workspace-grid">
+        <div className="workspace-main">
+          <div className="panel" role="region" aria-labelledby="new-inspection-heading">
+            <h2 id="new-inspection-heading">New inspection</h2>
+            <form className="create-form" onSubmit={handleSubmit}>
+              <div className="field">
+                <label htmlFor="new-inspection-title">New inspection title</label>
+                <input id="new-inspection-title" value={newTitle}
+                  onChange={handleTitleChange} placeholder="Inspection title" />
+              </div>
+              <button className="button-primary" type="submit" disabled={!validTitle}>Add inspection</button>
+            </form>
+            {newTitle && !validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
+          </div>
+
+          <div className="inspection-list" role="region" aria-labelledby="inspections-heading">
+            <div className="list-heading">
+              <h2 id="inspections-heading">Inspections</h2>
+              <div className="inspection-counts">
+                <p>Completed: {completedCount} / {inspections.length}</p>
+                <p>Draft: {draftCount}</p>
+              </div>
+            </div>
+            <div className="filters">
+              <div className="field">
+                <label htmlFor="inspection-search">Search inspections</label>
+                <input id="inspection-search" type="search" value={searchQuery}
+                  onChange={(event) => setSearchQuery(event.target.value)} />
+                {searchQuery && <button onClick={() => setSearchQuery("")}>Clear search</button>}
+              </div>
+              <div className="field">
+                <label htmlFor="inspection-status-filter">Status filter</label>
+                <select id="inspection-status-filter" value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value as "all" | InspectionStatus)}>
+                  <option value="all">All</option>
+                  <option value="draft">Draft</option>
+                  <option value="completed">Completed</option>
+                </select>
+              </div>
+            </div>
+            <div aria-live="polite">
+              {inspections.length > 0 && filteredInspections.length === 0 &&
+                <p className="empty-message">No inspections match your search and status filter.</p>}
+            </div>
+            {inspections.length === 0 && <p className="empty-message">No inspections yet. Add one to get started.</p>}
+            <div className="inspection-cards">
+              {filteredInspections.map((inspection) => (
+                <section className="inspection-card" key={inspection.id}>
+                  <InspectionCard title={inspection.title} status={inspection.status}
+                    onToggleStatus={() => toggleInspectionStatus(inspection.id)}
+                    onDelete={() => deleteInspection(inspection.id)}
+                    onRename={(title) => changeInspectionTitle(inspection.id, title)} />
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="workspace-sidebar">
+          <div className="panel" role="region" aria-labelledby="sync-heading">
+            <h2 id="sync-heading">Synchronization</h2>
+            <p className="pending-count">Pending sync: {syncState.pendingCount}</p>
+            <div aria-live="polite">
+              {syncState.syncing && <p>Synchronizing…</p>}
+              {syncState.unavailable && <p>{syncState.unavailable}</p>}
+              {syncState.error && <p role="alert">Synchronization error: {syncState.error.message}</p>}
+            </div>
+            <div className="sync-actions">
+              <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}
+                onClick={() => void sync.retry()}>Retry synchronization</button>
+              {syncState.error?.permanent && !syncState.error.authentication && <button disabled={syncState.syncing || !!syncState.unavailable}
+                onClick={() => void sync.discard((message) => window.confirm(message))}>Discard blocked operation</button>}
+            </div>
+            {!import.meta.env.DEV && <OwnerConnection connected={syncState.connected}
+              available={!!navigator.locks && !!resolveApiConfig(false, import.meta.env.VITE_API_BASE_URL).base?.startsWith("https://")}
+              unavailableReason={!navigator.locks ? "Synchronization is unavailable in this browser. You can keep working offline." : undefined}
+              connect={(token) => sync.setCredential(token)} />}
+          </div>
+
+          <div className="panel file-tools" role="region" aria-labelledby="data-heading">
+            <h2 id="data-heading">Import &amp; export</h2>
+            <ImportInspections onImported={async () => {
+              if (navigator.onLine) void sync.retry();
+              setInspections(await loadInspections());
+            }} />
+            <button disabled={exporting} onClick={() => void handleExport()}>Export inspections</button>
+            <div aria-live="polite">
+              {exporting && <p>Preparing export…</p>}
+              {exportMessage && <p>{exportMessage}</p>}
+            </div>
+            {exportError && <p role="alert">{exportError}</p>}
+          </div>
+        </div>
       </div>
-      {filteredInspections.map((inspection) => (
-        <section key={inspection.id}>
-          <InspectionCard
-            title={inspection.title}
-            status={inspection.status}
-            onToggleStatus={() => toggleInspectionStatus(inspection.id)}
-            onDelete={() => deleteInspection(inspection.id)}
-            onRename={(title) => changeInspectionTitle(inspection.id, title)}
-          />
-        </section>
-      ))}
     </main>
   );
 }

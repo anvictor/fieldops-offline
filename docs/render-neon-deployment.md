@@ -8,13 +8,26 @@ it does not provision or upgrade Neon.
 
 ## Neon project setup
 
-In [Neon Console](https://console.neon.tech), select a Free organization, choose
-New Project, name it `fieldops-offline`, select AWS Frankfurt and PostgreSQL 17,
-and enable only Postgres. Create project. Copy the browser address of its dashboard,
-or copy Project ID from Settings → General. These identify the project without
-revealing credentials. Never send the Connect connection string or passwords in chat.
+The existing deployment uses project `purple-union-67603644`, dedicated branch
+`fieldops-render`, AWS Ohio (`aws-us-east-2`) and PostgreSQL 18. The observed plan at
+TASK-016 verification was `free_v3`; runtime pooling and fixed 0.25 CU were verified.
+Do not create another project or change infrastructure merely to run the public demo.
 
-Selected project: `purple-union-67603644`, AWS Ohio (`aws-us-east-2`), PostgreSQL 18, observed `free_v3` subscription. Render API uses Ohio to colocate. Dedicated branch `fieldops-render` uses fixed 0.25 CU and pooling. Custom suspend interval settings were rejected by Neon Free (HTTP 412); its observed endpoint metadata is 0. Retain the provider-managed policy and monitor included compute quota; no custom five-minute schedule or paid upgrade is claimed. This actual selection supersedes the generic Frankfurt/PostgreSQL 17 creation example above.
+Neon Free rejected custom suspend interval settings (HTTP 412); observed endpoint
+metadata was 0. The provider-managed policy was retained, without claiming a custom
+five-minute schedule or a paid upgrade. Confirm current quotas/plan through the
+owner's Console before any future infrastructure change.
+
+Public entry points:
+- [Render PWA](https://fieldops-offline.onrender.com/fieldops-offline/)
+- [Anonymous API health](https://fieldops-api-g9z6.onrender.com/api/health)
+- [Pages offline demo](https://anvictor.github.io/fieldops-offline/)
+
+[TASK-016 authenticated live evidence](https://github.com/anvictor/fieldops-offline/pull/36#issuecomment-6127099422)
+records direct browser → protected API → Neon creation, updates, offline replay,
+credential lifecycle and synthetic cleanup on 2026-10-12. This is historical
+verification, not a promise that a health response proves synchronization now.
+See the [v1 demo](v1-demo.md) for a token-free presentation.
 
 Confirm actual plan/quotas before infrastructure changes. Use an isolated FieldOps
 branch/database; development and tests must not use production. Use Neon-provided
@@ -101,11 +114,11 @@ failure/reconnect/update/delete/reload/tab isolation but is explicitly local evi
 Use only `TEST_DATABASE_URL`, no production DB, screenshots with populated token fields,
 traces, request headers or credentials in artifacts.
 
-After deployment, record exact Render/Pages SHA/run/status in the implementation PR.
-Check actual HTTPS health, anonymous 401, forbidden Origin 403, authenticated synthetic
+For each deployment, record exact Render/Pages SHA/run/status in its implementation PR. UI-only changes use guarded presentation/PWA checks plus the disposable local auth fixture; they do not require distributing the owner credential. Revalidate actual authenticated synchronization when transport/backend behavior changes.
+For backend/transport releases or new authenticated production verification, check
+actual HTTPS health, anonymous 401, forbidden Origin 403, authenticated synthetic
 CRUD/replay and cleanup. Then use fresh synthetic browser storage to enter the runtime
 token, create/update inspections, verify corresponding Neon rows, queue offline
 changes/reconnect and delete only those synthetic rows. Record direct hosted evidence
 separately from local tests. A health response or green build is not full sync evidence.
-Only after successful deployment/live checks may a separately reviewed registry-only
-PR mark TASK-016 done.
+TASK-016 was reconciled to done by [PR #37](https://github.com/anvictor/fieldops-offline/pull/37) after its successful deployment/live checks. Subsequent tasks follow the same reviewed completion gates.

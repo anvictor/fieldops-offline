@@ -22,7 +22,7 @@ npm run server:dev
 
 The PostgreSQL named volume persists across container restarts. `docker compose --env-file server/.env -f server/compose.yaml down` stops containers without deleting that volume. Changing environment credentials does not change passwords in an existing volume.
 
-Migrations run explicitly, in filename order, inside a transaction with a migration ledger and advisory lock. Rerunning is safe. Add a new numbered SQL file for future schema changes; do not edit applied migrations. Neither startup nor frontend deployment runs migrations automatically.
+Migrations run explicitly, in filename order, inside a transaction with a migration ledger and advisory lock. Rerunning is safe. Add a new numbered SQL file for future schema changes; do not edit applied migrations. Local startup and frontend deployment do not run migrations automatically. The deployed Render API explicitly runs versioned migrations before the listener through `release.sh`; see [Render release configuration](../docs/render-neon-deployment.md#runtime-configuration-and-release).
 
 ## Commands
 
@@ -74,7 +74,7 @@ No coverage percentage is configured. Backend `*.test.ts` uses Node's test runne
 
 ## Deployment boundary
 
-GitHub Pages continues to deploy only the existing PWA. The repository provides local setup and a production API foundation, not an already hosted public API. Hosted PR CI builds both applications and executes frontend synchronization tests plus the real-PostgreSQL backend suite. Unauthenticated mode is for loopback development only. Production owner authentication and CORS are described below; Render/Neon rollout and owner credential UX are described in [the deployment guide](../docs/render-neon-deployment.md); per-user authorization, pagination and full operational hardening remain outside this private demo.
+GitHub Pages continues to deploy only the existing PWA. The protected API is deployed on [Render](https://fieldops-api-g9z6.onrender.com/api/health) with PostgreSQL in Neon. It supports one private owner; the [public demo](https://anvictor.github.io/fieldops-offline/) works offline without distributing that credential. Hosted PR CI builds both applications and executes frontend synchronization tests plus the real-PostgreSQL backend suite. Unauthenticated mode is for loopback development only. Production owner authentication and CORS are described below; Render/Neon rollout and owner credential UX are described in [the deployment guide](../docs/render-neon-deployment.md); per-user authorization, pagination and full operational hardening remain outside this private demo.
 
 
 ## Production API foundation
@@ -146,7 +146,7 @@ Provider-neutral commands:
 - Start: image default `node dist/index.js` with runtime secrets and host PORT.
 - Health: GET `/api/health`; separately verify authenticated DB CRUD/replay.
 
-Before claiming rollout complete: obtain connected hosting authorization (and
+For a new deployment, before claiming rollout complete: obtain connected hosting authorization (and
 approve any cost), choose private persistent PostgreSQL with backup/TLS policy,
 configure secrets/origin and HTTPS ingress, apply release migrations, smoke unauth
 401 and forbidden-Origin403 plus authenticated create/read/update/delete and replay,
@@ -155,7 +155,7 @@ existing DB volumes or run tests against production. Keep TEST_DATABASE_URL disp
 
 Rollback: retain the previous image and runtime config, stop accepting new traffic
 when needed, revert app image/config after checking schema compatibility. Applied
-migrations are not rewritten/reversed automatically. This task adds no migration.
+migrations are not rewritten/reversed automatically. Releasing only interface/documentation changes adds no migration.
 Record deployed SHA, run/status and direct vs reported live evidence in GitHub.
 
 For a local smoke test, publish container ports only on loopback and use an isolated

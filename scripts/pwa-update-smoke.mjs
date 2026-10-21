@@ -61,6 +61,7 @@ try {
   });
   const page = await context.newPage();
   const url = `http://127.0.0.1:${server.address().port}/fieldops-offline/`;
+  await page.clock.install();
   await page.goto(url);
   await page.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
   await page.reload();
@@ -74,13 +75,50 @@ try {
   const other = await context.newPage(); await other.goto(url);
   await other.getByLabel("New inspection title", { exact: true }).fill("Other tab unsaved title");
   await page.getByLabel("New inspection title", { exact: true }).fill("Do not lose this draft");
+  const firstContext = await browser.newContext();
+  firstContext.setDefaultTimeout(20000);
+  await firstContext.route("**/*", route => {
+    const target = new URL(route.request().url());
+    return target.hostname === "127.0.0.1" && !/(^|\/)api(?:\/|$)/.test(target.pathname)
+      ? route.continue() : route.abort("blockedbyclient");
+  });
+  const firstPage = await firstContext.newPage();
+  await firstPage.clock.install();
+  await firstPage.goto(url);
+  await firstPage.evaluate(() => navigator.serviceWorker.ready.then(() => undefined));
+  await firstPage.waitForFunction(async () => (await navigator.serviceWorker.getRegistration())?.active?.state === "activated");
+  assert.equal(await firstPage.evaluate(() => navigator.serviceWorker.controller), null);
+  assert.equal(await firstPage.getByRole("heading", { name: "A new version is available" }).count(), 0);
+  await firstPage.getByLabel("New inspection title", { exact: true }).fill("Uncontrolled first-visit draft");
   release = "v2";
   // Fast-forward the real controller's timer rather than directly calling update().
-  await page.clock.install(); await page.clock.fastForward(5 * 60 * 1000 + 1);
+  await page.clock.fastForward(5 * 60 * 1000 + 1);
+  await firstPage.clock.fastForward(5 * 60 * 1000 + 1);
   await page.getByRole("heading", { name: "A new version is available" }).waitFor();
   assert.equal(await page.getByLabel("New inspection title", { exact: true }).inputValue(), "Do not lose this draft");
   assert.equal(await page.getByRole("button", { name: "Update now", exact: true }).isDisabled(), true);
   checks.push("Idle periodic check discovered a real waiting v2 worker; create draft retained and activation blocked");
+  await firstPage.getByRole("heading", { name: "A new version is available" }).waitFor();
+  await firstPage.waitForFunction(async () => {
+    const registration = await navigator.serviceWorker.getRegistration();
+    return !registration.waiting && !registration.installing && registration.active?.state === "activated";
+  });
+  assert.equal(await firstPage.evaluate(() => navigator.serviceWorker.controller), null);
+  assert.equal(await firstPage.getByLabel("New inspection title", { exact: true }).inputValue(), "Uncontrolled first-visit draft");
+  assert.equal(await firstPage.getByRole("button", { name: "Update now", exact: true }).isDisabled(), true);
+  await firstPage.getByLabel("New inspection title", { exact: true }).fill("");
+  await Promise.all([
+    firstPage.waitForEvent("load"),
+    firstPage.getByRole("button", { name: "Update now", exact: true }).click(),
+  ]);
+  await firstPage.waitForFunction(() => !!navigator.serviceWorker.controller);
+  const cachedVersion = await firstPage.evaluate(async () => {
+    const response = await caches.match(new URL("task018-smoke-version.js", location.href).href, { ignoreSearch: true });
+    return response?.text();
+  });
+  assert.match(cachedVersion, /fixture v2/);
+  checks.push("First-visit page stayed uncontrolled through initial install and replacement; banner preserved draft after automatic activation; explicit reload acquired new worker");
+  await firstContext.close();
   await page.getByRole("button", { name: "Later", exact: true }).click();
   await page.getByRole("button", { name: "App update available", exact: true }).click();
   await page.getByLabel("New inspection title", { exact: true }).fill("");

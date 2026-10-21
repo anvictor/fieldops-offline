@@ -9,12 +9,15 @@ class Worker extends EventTarget {
 function fixture(waiting = true, controlled = true) {
   vi.useFakeTimers();
   const worker = new Worker();
+  const baseline = new Worker();
+  baseline.state = "activated";
   const registration = Object.assign(new EventTarget(), {
+    active: controlled || waiting ? baseline : null as Worker | null,
     waiting: waiting ? worker : null, installing: null as Worker | null,
     update: vi.fn().mockResolvedValue(undefined),
   });
   const container = Object.assign(new EventTarget(), {
-    controller: controlled ? new Worker() : null as Worker | null,
+    controller: controlled ? baseline : null as Worker | null,
     register: vi.fn().mockResolvedValue(registration),
   });
   const win = new EventTarget();
@@ -27,10 +30,15 @@ function fixture(waiting = true, controlled = true) {
     window: win as unknown as Window, document: doc as unknown as Document,
     base: "/fieldops-offline/", online: () => online, blocked: () => blocked, reload,
   });
-  const activate = () => {
+  const activate = (claim = true) => {
     registration.waiting = null;
-    container.controller = worker;
-    container.dispatchEvent(new Event("controllerchange"));
+    registration.active = worker;
+    worker.state = "activated";
+    worker.dispatchEvent(new Event("statechange"));
+    if (claim) {
+      container.controller = worker;
+      container.dispatchEvent(new Event("controllerchange"));
+    }
   };
   manager.start();
   return { manager, worker, registration, container, win, doc, reload, activate,
@@ -39,6 +47,56 @@ function fixture(waiting = true, controlled = true) {
 }
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 describe("production update lifecycle", () => {
+  it("waits for activated even if controllerchange arrives while activation is in progress", async () => {
+    const f = fixture(); await vi.advanceTimersByTimeAsync(0);
+    f.manager.apply();
+    f.worker.state = "activating";
+    f.container.controller = f.worker;
+    f.container.dispatchEvent(new Event("controllerchange"));
+    expect(f.reload).not.toHaveBeenCalled();
+    f.activate(); expect(f.reload).toHaveBeenCalledTimes(1);
+    f.manager.stop();
+  });
+  it("does not call a retried failed first installation an update", async () => {
+    const f = fixture(false, false); await vi.advanceTimersByTimeAsync(0);
+    const failed = new Worker(); failed.state = "installing";
+    f.registration.installing = failed; f.registration.dispatchEvent(new Event("updatefound"));
+    failed.state = "redundant"; failed.dispatchEvent(new Event("statechange"));
+    f.registration.installing = f.worker; f.registration.dispatchEvent(new Event("updatefound"));
+    f.worker.dispatchEvent(new Event("statechange"));
+    expect(f.manager.getSnapshot().available).toBe(false); f.manager.stop();
+  });
+  it("finds a waiting update without a page controller and waits for worker activation", async () => {
+    const f = fixture(true, false); await vi.advanceTimersByTimeAsync(0);
+    expect(f.manager.getSnapshot().available).toBe(true);
+    f.manager.apply(); expect(f.reload).not.toHaveBeenCalled();
+    f.activate(false); expect(f.container.controller).toBeNull();
+    expect(f.reload).toHaveBeenCalledTimes(1); f.manager.stop();
+  });
+  it("ignores first install but detects a later automatically activating worker without controller", async () => {
+    const f = fixture(false, false); await vi.advanceTimersByTimeAsync(0);
+    const first = new Worker(); first.state = "installing";
+    f.registration.installing = first; f.registration.dispatchEvent(new Event("updatefound"));
+    first.state = "activated"; f.registration.active = first;
+    first.dispatchEvent(new Event("statechange"));
+    expect(f.manager.getSnapshot().available).toBe(false);
+    f.registration.installing = f.worker; f.worker.state = "installing";
+    f.registration.dispatchEvent(new Event("updatefound"));
+    f.worker.state = "installed"; f.worker.dispatchEvent(new Event("statechange"));
+    expect(f.manager.getSnapshot().available).toBe(true);
+    f.activate(false); expect(f.reload).not.toHaveBeenCalled();
+    f.setBlocked(true); f.manager.apply(); expect(f.reload).not.toHaveBeenCalled();
+    f.setBlocked(false); f.manager.apply(); expect(f.reload).toHaveBeenCalledTimes(1);
+    f.manager.stop();
+  });
+  it("defers uncontrolled-tab reload if work starts while worker activates", async () => {
+    const f = fixture(true, false); await vi.advanceTimersByTimeAsync(0);
+    f.manager.apply(); f.setBlocked(true); f.activate(false);
+    expect(f.reload).not.toHaveBeenCalled();
+    expect(f.manager.getSnapshot().applying).toBe(false);
+    f.setBlocked(false); f.manager.apply(); expect(f.reload).toHaveBeenCalledTimes(1);
+    f.manager.stop();
+  });
   it("detects waiting update without reloading, defers and reopens it", async () => {
     const f = fixture(); await vi.advanceTimersByTimeAsync(0);
     expect(f.manager.getSnapshot().available).toBe(true);

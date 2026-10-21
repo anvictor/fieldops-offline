@@ -26,6 +26,8 @@ export function createPwaUpdates(options: Options) {
   let lastCheck = -Infinity;
   let consent = false;
   let previousController: ServiceWorker | null = null;
+  let initialWorker: ServiceWorker | null = null;
+  let updateWorker: ServiceWorker | null = null;
   let activationTimer: ReturnType<typeof setTimeout> | undefined;
   let stop: (() => void) | undefined;
   const now = options.now ?? Date.now;
@@ -55,11 +57,12 @@ export function createPwaUpdates(options: Options) {
     let alive = true;
     const cleanups: Array<() => void> = [];
     previousController = container.controller;
+    initialWorker ??= container.controller;
     const changed = () => {
       const current = container.controller;
-      if (current && current !== previousController && previousController) {
+      if (current && current !== previousController && (previousController || current === updateWorker)) {
         ready();
-        if (consent) finish();
+        if (consent && (!updateWorker || updateWorker.state === "activated")) finish();
       }
       previousController = current;
     };
@@ -81,20 +84,30 @@ export function createPwaUpdates(options: Options) {
     void registering.then((value) => {
       if (!alive) return;
       registration = value;
-      const inspect = () => { if (value.waiting && container.controller) ready(); };
-      const observe = () => {
-        const worker = value.installing;
+      initialWorker ??= value.active;
+      const watch = (worker: ServiceWorker | null, replacement: boolean) => {
         if (!worker) return;
-        const installed = () => {
-          if (worker.state === "installed" && container.controller) ready();
+        initialWorker ??= worker;
+        const isUpdate = replacement || worker !== initialWorker;
+        if (isUpdate) updateWorker = worker;
+        const transitioned = () => {
+          if (!isUpdate && worker === initialWorker && worker.state === "redundant" && !value.active) {
+            initialWorker = null;
+          }
+          if (!isUpdate || worker !== updateWorker) return;
+          if (["installed", "activating", "activated"].includes(worker.state)) ready();
+          // An uncontrolled first-visit page may never receive controllerchange.
+          if (worker.state === "activated" && consent) finish();
         };
-        worker.addEventListener("statechange", installed);
-        cleanups.push(() => worker.removeEventListener("statechange", installed));
-        installed();
+        worker.addEventListener("statechange", transitioned);
+        cleanups.push(() => worker.removeEventListener("statechange", transitioned));
+        transitioned();
       };
+      const observe = () => watch(value.installing, false);
       value.addEventListener("updatefound", observe);
       cleanups.push(() => value.removeEventListener("updatefound", observe));
-      inspect();
+      watch(value.waiting, true);
+      if (value.active && value.active !== initialWorker) watch(value.active, true);
       observe();
       void check();
     }).catch(() => {
@@ -116,14 +129,18 @@ export function createPwaUpdates(options: Options) {
       return;
     }
     publish({ applying: true, error: null });
-    const waiting = registration?.waiting;
-    if (!waiting) { finish(); return; }
+    const target = registration?.waiting ?? updateWorker;
+    if (!target || target.state === "activated") { finish(); return; }
+    if (target.state === "redundant") {
+      publish({ applying: false, error: "This update is no longer available. Keep working and wait for the next check." });
+      return;
+    }
     consent = true;
     activationTimer = setTimeout(() => {
       consent = false;
       publish({ applying: false, error: "Could not finish the update. Keep working or try Update now again." });
     }, ACTIVATION_TIMEOUT);
-    try { waiting.postMessage({ type: "SKIP_WAITING" }); } catch {
+    try { target.postMessage({ type: "SKIP_WAITING" }); } catch {
       clearTimeout(activationTimer);
       consent = false;
       publish({ applying: false, error: "Could not activate the update. Please try again." });

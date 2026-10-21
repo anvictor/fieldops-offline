@@ -126,6 +126,13 @@
       "spec": "docs/tasks/018-pwa-update-banner.md",
       "branch": "codex/018-pwa-update-banner",
       "pr": 40
+    },
+    {
+      "id": "TASK-019",
+      "status": "in_progress",
+      "spec": "docs/tasks/019-uncontrolled-pwa-updates.md",
+      "branch": "codex/019-uncontrolled-pwa-updates",
+      "pr": null
     }
   ]
 }

@@ -74,6 +74,7 @@ jobs:
           preview_pid=$!
           trap 'kill "$preview_pid" 2>/dev/null || true' EXIT
           SMOKE_SITE_URL=http://127.0.0.1:4173/fieldops-offline/ SMOKE_EXPECTED_SHA="$GITHUB_SHA" npm run test:live
+          npm run test:pwa-update
 
       - name: Upload synthetic preview evidence
         if: always()

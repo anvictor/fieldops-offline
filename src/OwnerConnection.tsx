@@ -1,3 +1,4 @@
+import { useUpdateBlocker } from "./hooks/useUpdateBlocker";
 import { useId, useState } from "react";
 
 type Props = {
@@ -11,6 +12,7 @@ export function OwnerConnection({ connected, available, unavailableReason, conne
   const inputId = useId();
   const [draft, setDraft] = useState("");
   const [error, setError] = useState("");
+  useUpdateBlocker(draft.length > 0);
 
   function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -50,8 +50,11 @@ explainable; ESLint is configured, no dedicated formatter is configured.
 
 Retain Vite base, manifest/start URL, worker scope and navigation fallback under
 `/fieldops-offline/`. The worker precaches the shell/assets after an initial online
-visit; it cannot make an uncached first visit work offline. Updated workers wait
-for existing tabs to close rather than forcibly reload forms. Preserve cache
+visit; it cannot make an uncached first visit work offline. Production update checks run every five visible/online minutes and on focus,
+visible resume and reconnect (one-minute throttle). A waiting worker produces an
+Update now / Later banner. Only explicit safe consent reloads that tab; other
+tabs never automatically reload. Unsaved forms and active local work/sync block
+update. Reload clears the tab owner token, not IndexedDB or pending operations. Preserve cache
 cleanup and offline data; installation requires a supported browser/secure context.
 
 GitHub Pages deploys only the PWA, not Express/PostgreSQL. Development `/api`

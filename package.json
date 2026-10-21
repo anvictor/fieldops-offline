@@ -14,7 +14,8 @@
     "server:migrate": "npm --prefix server run migrate",
     "server:test": "npm --prefix server test",
     "test": "vitest run",
-    "test:live": "node scripts/deployed-smoke.mjs"
+    "test:live": "node scripts/deployed-smoke.mjs",
+    "test:pwa-update": "node scripts/pwa-update-smoke.mjs"
   },
   "dependencies": {
     "react": "^19.2.8",

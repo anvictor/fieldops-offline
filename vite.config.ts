@@ -9,8 +9,8 @@ export default defineConfig({
     react(),
     VitePWA({
       strategies: "generateSW",
-      injectRegister: "script",
-      // Let updated workers wait until existing tabs close; never reload a form.
+      injectRegister: false,
+      // The application registers once and applies updates only with safe tab-local consent.
       registerType: "prompt",
       scope: "/fieldops-offline/",
       manifest: {

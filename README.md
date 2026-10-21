@@ -165,3 +165,11 @@ A failed uncached fetch proves offline transport while cached navigation proves
 the shell. Completion requires the **entire** deployment workflow, including smoke,
 to succeed. These are direct automated hosted live checks for covered scenarios;
 future behavior changes still require relevant tests and all review/merge gates.
+
+## Application updates
+
+The production PWA checks its service worker when registered, every five minutes while visible and online, and on focus, visible resume or reconnect. Resume checks are throttled to one per minute. An update banner offers **Update now** and **Later**; a dismissed banner can be reopened with **App update available**. Checks and new workers never reload a tab automatically.
+
+Finish or cancel create/rename/token input and import previews, and wait for local writes/export and synchronization before updating. The update reloads only the tab that explicitly requested it; another open tab can continue editing. Saved inspections and pending operations stay in IndexedDB, but the owner token clears on reload. If activation fails, keep working or retry. First installation still requires a network connection.
+
+Run `npm run test:pwa-update` for an isolated two-production-version browser check (idle discovery, dirty/busy guards, Later, single-tab consent, multi-tab draft preservation and offline reopening). It uses the pinned Playwright Chromium; `SMOKE_BROWSER_EXECUTABLE` can select an already installed browser. All records and tokens are synthetic and API requests are blocked.

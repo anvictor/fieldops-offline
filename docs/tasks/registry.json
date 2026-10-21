@@ -129,10 +129,10 @@
     },
     {
       "id": "TASK-019",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/019-uncontrolled-pwa-updates.md",
       "branch": "codex/019-uncontrolled-pwa-updates",
-      "pr": null
+      "pr": 43
     }
   ]
 }

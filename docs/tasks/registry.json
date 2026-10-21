@@ -122,10 +122,10 @@
     },
     {
       "id": "TASK-018",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/018-pwa-update-banner.md",
       "branch": "codex/018-pwa-update-banner",
-      "pr": null
+      "pr": 40
     }
   ]
 }

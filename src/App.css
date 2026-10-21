@@ -53,3 +53,8 @@ label { display: block; font-size: 14px; font-weight: 600; }
   .inspection-card > button { width: 100%; margin-right: 0; }
   .connection-status { align-self: flex-start; }
 }
+
+.update-banner { padding: 20px; margin-bottom: 24px; border: 2px solid var(--accent); border-radius: 12px; background: var(--surface); }
+.update-banner h2 { margin-bottom: 10px; }
+.update-banner p { max-width: 80ch; overflow-wrap: anywhere; }
+.update-reminder { margin-bottom: 16px; }

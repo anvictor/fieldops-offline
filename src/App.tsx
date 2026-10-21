@@ -1,3 +1,6 @@
+import { PwaUpdateBanner } from "./PwaUpdateBanner";
+import { useUpdateBlocker } from "./hooks/useUpdateBlocker";
+import { withUpdateWork } from "./updateSafety";
 import "./App.css";
 import { OwnerConnection } from "./OwnerConnection";
 import { ImportInspections } from "./ImportInspections";
@@ -43,6 +46,7 @@ function InspectionCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const validTitle = normalizeTitle(draftTitle);
+  useUpdateBlocker(editing || saving);
 
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -105,6 +109,7 @@ function App() {
   const syncState = useSyncExternalStore(sync.subscribe, sync.getSnapshot);
   const validTitle = normalizeTitle(newTitle);
   const isOnline = useOnlineStatus();
+  useUpdateBlocker(newTitle.length > 0 || exporting || syncState.syncing);
 
   useEffect(() => {
     async function initDB() {
@@ -139,7 +144,7 @@ function App() {
     };
 
     try {
-      await saveInspectionWithSync(updatedInspection, "UPDATE");
+      await withUpdateWork(() => saveInspectionWithSync(updatedInspection, "UPDATE"));
       if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) =>
@@ -164,7 +169,7 @@ function App() {
     };
 
     try {
-      await saveInspectionWithSync(newInspection, "CREATE");
+      await withUpdateWork(() => saveInspectionWithSync(newInspection, "CREATE"));
       if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) => [...prevInspections, newInspection]);
@@ -177,7 +182,7 @@ function App() {
 
   async function deleteInspection(id: string) {
     try {
-      await deleteInspectionWithSync(id);
+      await withUpdateWork(() => deleteInspectionWithSync(id));
       if (navigator.onLine) void sync.retry();
 
       setInspections((prevInspections) =>
@@ -189,7 +194,7 @@ function App() {
   }
 
   async function changeInspectionTitle(id: string, title: string) {
-    const result = await renameInspection(id, title);
+    const result = await withUpdateWork(() => renameInspection(id, title));
     setInspections((items) => items.map((item) => item.id === id ? result.inspection : item));
     if (result.changed && navigator.onLine) void sync.retry();
   }
@@ -199,7 +204,7 @@ function App() {
     setExportMessage("");
     setExportError("");
     try {
-      await exportInspections();
+      await withUpdateWork(() => exportInspections());
       setExportMessage("Download requested. Check your browser downloads.");
     } catch {
       setExportError("Could not export inspections. Please try again.");
@@ -230,6 +235,7 @@ function App() {
 
   return (
     <main className="app-shell">
+      <PwaUpdateBanner />
       <header className="app-header">
         <div>
           <p className="eyebrow">Inspection workspace</p>

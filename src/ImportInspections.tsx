@@ -1,3 +1,5 @@
+import { useUpdateBlocker } from "./hooks/useUpdateBlocker";
+import { withUpdateWork } from "./updateSafety";
 import { useEffect, useId, useRef, useState } from "react";
 import { confirmInspectionImport, previewInspectionImport, readInspectionImport } from "./import";
 
@@ -12,6 +14,7 @@ export function ImportInspections({ onImported }: { onImported: () => Promise<vo
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   useEffect(() => () => { generation.current++; }, []);
+  useUpdateBlocker(!!preview || reading || busy);
 
   function cancel() {
     if (committing.current) return;
@@ -37,7 +40,7 @@ export function ImportInspections({ onImported }: { onImported: () => Promise<vo
     if (!preview || preview.imported === 0 || committing.current) return;
     committing.current = true; setBusy(true); setError(""); setMessage("");
     try {
-      const counts = await confirmInspectionImport(preview.records);
+      const counts = await withUpdateWork(() => confirmInspectionImport(preview.records));
       setPreview(null);
       setMessage(`Imported ${counts.imported}; skipped ${counts.skipped}.`);
       try { await onImported(); } catch {

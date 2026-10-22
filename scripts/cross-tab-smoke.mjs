@@ -96,6 +96,8 @@ try {
   await card(a).getByRole("button", { name: "Delete inspection", exact: true }).click();
   await card(a).waitFor({ state: "detached" });
   const before = await snapshot(a);
+  assert.equal(await card(b).getByRole("button", { name: "Save title", exact: true }).isEnabled(), true);
+  assert.equal(await card(b).getByText(/This inspection was deleted in another tab/).count(), 0);
   // Programmatic submit avoids a focus event reread: Save must itself detect deletion.
   await card(b).locator("form").evaluate(form => form.requestSubmit());
   await card(b).getByText(/This inspection was deleted in another tab/).waitFor();

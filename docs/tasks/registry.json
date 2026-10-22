@@ -140,6 +140,13 @@
       "spec": "docs/tasks/020-cross-tab-inspections.md",
       "branch": "codex/020-cross-tab-inspections",
       "pr": 45
+    },
+    {
+      "id": "TASK-021",
+      "status": "in_review",
+      "spec": "docs/tasks/021-activity-server-refresh.md",
+      "branch": "codex/021-activity-server-refresh",
+      "pr": 48
     }
   ]
 }

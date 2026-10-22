@@ -37,8 +37,7 @@ CREATE supports client UUID replay: new 201, matching normalized title/status
 200, different content 409 `ID_CONFLICT`; concurrent replay uses DB uniqueness.
 Missing inspection GET/PATCH/DELETE returns JSON `INSPECTION_NOT_FOUND`, distinct
 from unknown-route `NOT_FOUND`. Client DELETE may confirm missing; PATCH blocks.
-No per-user accounts, initial download, multi-device conflict resolution or
-server-side fencing exists. Preserve these boundaries; do not imply exactly-once
+An authenticated bounded snapshot now provides download and explicit deletion awareness. No per-user accounts, general concurrent-edit conflict resolution or general stale-write fencing exists. Preserve these boundaries; do not imply exactly-once
 sync or deployed public API. Disposable `TEST_DATABASE_URL` is mandatory for
 integration tests; unique schemas do not make a production database safe to use.
 
@@ -54,3 +53,6 @@ Never embed runtime secrets in a Vite build, Docker layer or durable offline sto
 The shared owner token is one principal, not user isolation. Hosted TLS/private DB,
 rate limits, quotas/backups, bounded dataset and frontend credential UX must precede
 claiming public end-to-end sync. Keep migrations explicit and production DB off tests.
+
+
+TASK021 adds migration002 permanent retired UUIDs; POST/DELETE serialize identity transactions, including retirement on authenticated valid DELETE404. Retired CREATE returns409 INSPECTION_DELETED. Snapshot route precedes:id, uses one SQL snapshot and rejects either collection above5000 (no partial/truncated apply). Backend release/migration must precede frontend; migration001 remains unchanged. Tombstones cover deletions from rollout onward, not unavailable pre-migration history.

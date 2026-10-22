@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
-import { renameInspection } from "../src/inspections";
-import { deleteInspectionWithSync, loadInspections, loadSyncQueue, saveInspectionWithSync } from "../src/db";
+import { renameInspection, toggleInspection } from "../src/inspections";
+import { deleteInspectionWithSync, loadInspections, loadSyncQueue, saveInspectionWithSync, subscribeQueueChanges } from "../src/db";
 import type { StoredInspection } from "../src/db";
 
 const record: StoredInspection = { id: "00000000-0000-4000-8000-000000000012", title: "Original", status: "draft" };
@@ -59,4 +59,67 @@ describe("offline inspection title editing", () => {
     expect(await loadInspections()).toEqual([record]); expect(await loadSyncQueue()).toEqual(queue);
     expect((await renameInspection(record.id, "Retry title")).changed).toBe(true);
   });
+});
+
+
+describe("cross-tab update races", () => {
+  it("does not resurrect when deletion commits between the old read and update", async () => {
+    await saveInspectionWithSync(record, "CREATE");
+    const editing = renameInspection(record.id, "Late edit");
+    const deleting = deleteInspectionWithSync(record.id);
+    await Promise.allSettled([editing, deleting]);
+    expect(await loadInspections()).toEqual([]);
+    expect((await loadSyncQueue()).at(-1)?.operation).toBe("DELETE");
+  });
+  it("rejects stale expected titles without altering record or queue", async () => {
+    await saveInspectionWithSync(record, "CREATE");
+    await renameInspection(record.id, "Other tab");
+    const queue = await loadSyncQueue();
+    await expect(renameInspection(record.id, "My draft", "Original")).rejects.toThrow("changed in another tab");
+    expect((await loadInspections())[0].title).toBe("Other tab");
+    expect(await loadSyncQueue()).toEqual(queue);
+  });
+});
+
+
+it("patches only the current requested field and rejects missing toggle without queue writes", async () => {
+  await saveInspectionWithSync(record, "CREATE");
+  await renameInspection(record.id, "New title");
+  await toggleInspection(record.id);
+  expect(await loadInspections()).toEqual([{ ...record, title: "New title", status: "completed" }]);
+  await deleteInspectionWithSync(record.id);
+  const before = await loadSyncQueue();
+  await expect(toggleInspection(record.id)).rejects.toThrow("deleted in another tab");
+  expect(await loadSyncQueue()).toEqual(before);
+});
+it("committed writes succeed even if notification transport throws", async () => {
+  vi.stubGlobal("BroadcastChannel", class { constructor() { throw new Error("unavailable"); } });
+  await saveInspectionWithSync(record, "CREATE");
+  await renameInspection(record.id, "Committed");
+  expect((await loadInspections())[0].title).toBe("Committed");
+  expect(await loadSyncQueue()).toHaveLength(2);
+});
+
+it("captures generic UPDATE payload before asynchronous access", async () => {
+  await saveInspectionWithSync(record, "CREATE");
+  const mutable = { ...record, title: "Captured" };
+  const saving = saveInspectionWithSync(mutable, "UPDATE");
+  mutable.title = "Later mutation";
+  await saving;
+  expect((await loadSyncQueue()).at(-1)?.payload?.title).toBe("Captured");
+  expect((await loadInspections())[0].title).toBe("Captured");
+});
+it("notifies only committed changes, isolates subscriber failures and cleans up", async () => {
+  vi.stubGlobal("BroadcastChannel", class { constructor() { throw new Error("unavailable"); } });
+  const listener = vi.fn();
+  const stopBroken = subscribeQueueChanges(() => { throw new Error("subscriber"); });
+  const stop = subscribeQueueChanges(listener);
+  await saveInspectionWithSync(record, "CREATE");
+  expect(listener).toHaveBeenCalledTimes(1);
+  await renameInspection(record.id, record.title);
+  await expect(renameInspection("missing", "Other")).rejects.toThrow();
+  expect(listener).toHaveBeenCalledTimes(1);
+  stop(); stopBroken();
+  await renameInspection(record.id, "Changed");
+  expect(listener).toHaveBeenCalledTimes(1);
 });

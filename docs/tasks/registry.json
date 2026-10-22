@@ -136,10 +136,10 @@
     },
     {
       "id": "TASK-020",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/020-cross-tab-inspections.md",
       "branch": "codex/020-cross-tab-inspections",
-      "pr": null
+      "pr": 45
     }
   ]
 }

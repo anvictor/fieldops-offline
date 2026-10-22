@@ -133,6 +133,13 @@
       "spec": "docs/tasks/019-uncontrolled-pwa-updates.md",
       "branch": "codex/019-uncontrolled-pwa-updates",
       "pr": 43
+    },
+    {
+      "id": "TASK-020",
+      "status": "draft",
+      "spec": "docs/tasks/020-cross-tab-inspections.md",
+      "branch": "codex/020-cross-tab-inspections",
+      "pr": null
     }
   ]
 }

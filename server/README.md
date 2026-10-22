@@ -1,6 +1,6 @@
 # FieldOps API
 
-A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA can replay its IndexedDB mutation queue through the local Vite proxy. Production supports a private single-owner bearer token. No server-to-client download, per-user accounts or conflict resolution is implemented.
+A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA can replay its IndexedDB mutation queue through the local Vite proxy. Production supports a private single-owner bearer token. An authenticated bounded snapshot supports activity-driven download and explicit deletion awareness; per-user accounts and general concurrent-edit conflict resolution are not implemented.
 
 ## Local setup
 
@@ -86,7 +86,7 @@ closed without a valid API_TOKEN and CORS_ORIGINS. Production defaults HOST to
 
 This mode is a **private single-owner API**. Anyone holding its owner token has
 access to the same inspection data; there is no per-user tenant separation, login,
-expiry/session management or initial server download. Do not share it as a public
+expiry/session management. Authenticated snapshots may download the shared owner data. Do not share it as a public
 recruiter demo credential. CORS does not prevent nonbrowser requests and is not
 an authorization mechanism.
 
@@ -162,3 +162,12 @@ For a local smoke test, publish container ports only on loopback and use an isol
 throwaway database. Use a runtime `--env-file` outside the build context with restrictive
 permissions; never commit it or dump container environment/inspect output containing
 secrets. Stop and remove only those disposable containers afterward.
+
+
+## Deletion awareness and bounded snapshots
+
+`GET /api/inspections/snapshot` returns `{ inspections, deletedIds }` from a single SQL/MVCC statement. It is authenticated like CRUD and uses no-store. Active rows and retired UUIDs each have a5000-entry limit (query5001, reject whole response413 `SNAPSHOT_TOO_LARGE`); no truncation/pagination is implied.
+
+Migration002 adds permanent inspection_tombstones. Authenticated valid DELETE retires a UUID transactionally even if its row is already missing; the response stays204/inspection-specific404. POST/DELETE serialize through an advisory transaction lock keyed by UUID, so a delayed CREATE cannot recreate a retired identity:409 `INSPECTION_DELETED`. PATCH remains non-upserting404. Applied migration001 is unchanged. No tombstone collection is implemented; deletions before002 cannot be reconstructed. Non-deletion concurrent edits retain existing last-successful-write behavior.
+
+Deploy backend/migration first via the existing release command, verify health/snapshot auth without exposing the owner token, then deploy frontend. Old clients keep their CRUD contracts and cannot recreate newly retired IDs. Do not manually mutate production inspection data for verification.

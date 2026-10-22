@@ -5,7 +5,8 @@ import "./App.css";
 import { OwnerConnection } from "./OwnerConnection";
 import { ImportInspections } from "./ImportInspections";
 import { searchInspections } from "./search";
-import { renameInspection } from "./inspections";
+import { useInspections } from "./hooks/useInspections";
+import { renameInspection, toggleInspection } from "./inspections";
 import { exportInspections } from "./export";
 import { normalizeTitle, resolveApiConfig } from "./api";
 import { createSyncManager } from "./sync";
@@ -13,7 +14,8 @@ import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
-  loadInspections,
+  InspectionUnavailableError,
+  InspectionConflictError,
   saveInspectionWithSync,
 } from "./db";
 
@@ -26,14 +28,18 @@ type Inspection = {
 };
 
 type InspectionCardProps = {
+  deleted: boolean;
+  onEditing: (editing: boolean) => void;
   title: string;
   status: InspectionStatus;
   onToggleStatus: () => void;
   onDelete: () => void;
-  onRename: (title: string) => Promise<void>;
+  onRename: (title: string, expectedTitle: string) => Promise<void>;
 };
 
 function InspectionCard({
+  deleted,
+  onEditing,
   title,
   status,
   onToggleStatus,
@@ -43,6 +49,9 @@ function InspectionCard({
   const inputId = useId();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
+  const [originalTitle, setOriginalTitle] = useState(title);
+  const [missing, setMissing] = useState(false);
+  const unavailable = deleted || missing;
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const validTitle = normalizeTitle(draftTitle);
@@ -50,14 +59,17 @@ function InspectionCard({
 
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (saving || !validTitle) return;
+    if (saving || !validTitle || unavailable) return;
     setSaving(true);
     setError("");
     try {
-      await onRename(draftTitle);
+      await onRename(draftTitle, originalTitle);
       setEditing(false);
-    } catch {
-      setError("Could not save the title. Please try again.");
+      onEditing(false);
+    } catch (error) {
+      if (error instanceof InspectionUnavailableError) setMissing(true);
+      setError(error instanceof InspectionUnavailableError || error instanceof InspectionConflictError
+        ? error.message : "Could not save the title. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -65,7 +77,7 @@ function InspectionCard({
 
   return (
     <>
-      <h3>Card: {title}</h3>
+      <h3>{unavailable ? "Deleted inspection" : "Card"}: {title}</h3>
       <p>
         Status:{" "}
         <strong className={status === "completed" ? "completed" : "draft"}>
@@ -76,22 +88,23 @@ function InspectionCard({
         <label htmlFor={inputId}>Inspection title</label>
         <input id={inputId} value={draftTitle} disabled={saving}
           onChange={(event) => setDraftTitle(event.target.value)} autoFocus />
-        <button className="button-primary" type="submit" disabled={saving || !validTitle}>Save title</button>
-        <button type="button" disabled={saving} onClick={() => { setEditing(false); setError(""); }}>Cancel</button>
+        <button className="button-primary" type="submit" disabled={saving || !validTitle || unavailable}>Save title</button>
+        <button type="button" disabled={saving} onClick={() => { setEditing(false); setError(""); onEditing(false); }}>{unavailable ? "Dismiss draft" : "Cancel"}</button>
         {!validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
         <div aria-live="polite">{saving && <p>Saving title…</p>}</div>
-        {error && <p role="alert">{error}</p>}
-      </form> : <button onClick={() => { setDraftTitle(title); setError(""); setEditing(true); }}>Edit title</button>}
-      <button disabled={saving} onClick={onToggleStatus}>
+        {unavailable ? <p role="alert">This inspection was deleted in another tab. Copy your draft before dismissing it.</p> : error && <p role="alert">{error}</p>}
+      </form> : <button onClick={() => { setDraftTitle(title); setOriginalTitle(title); setError(""); setEditing(true); onEditing(true); }}>Edit title</button>}
+      <button disabled={saving || unavailable} onClick={onToggleStatus}>
         {status === "draft" ? "Complete inspection" : "Reopen inspection"}
       </button>
-      <button className="button-danger" disabled={saving} onClick={onDelete}>Delete inspection</button>
+      <button className="button-danger" disabled={saving || unavailable} onClick={onDelete}>Delete inspection</button>
     </>
   );
 }
 
 function App() {
-  const [inspections, setInspections] = useState<Inspection[]>([]);
+  const { rows, refresh, edit, error: refreshError } = useInspections();
+  const inspections = rows.filter(row => !row.deleted).map(row => row.inspection);
   const [exporting, setExporting] = useState(false);
   const [exportMessage, setExportMessage] = useState("");
   const [exportError, setExportError] = useState("");
@@ -112,19 +125,6 @@ function App() {
   useUpdateBlocker(newTitle.length > 0 || exporting || syncState.syncing);
 
   useEffect(() => {
-    async function initDB() {
-      try {
-        const storedInspections = await loadInspections();
-
-        setInspections(storedInspections);
-      } catch (error) {
-        console.error("Failed to initialize FieldOps DB:", error);
-      }
-    }
-
-    initDB();
-  }, []);
-  useEffect(() => {
     sync.start();
     return () => sync.stop();
   }, [sync]);
@@ -132,29 +132,12 @@ function App() {
     if (isOnline) void sync.retry(); else sync.pause();
   }, [isOnline, sync]);
   async function toggleInspectionStatus(id: string) {
-    const inspection = inspections.find((item) => item.id === id);
-
-    if (!inspection) {
-      return;
-    }
-
-    const updatedInspection: Inspection = {
-      ...inspection,
-      status: inspection.status === "draft" ? "completed" : "draft",
-    };
-
     try {
-      await withUpdateWork(() => saveInspectionWithSync(updatedInspection, "UPDATE"));
+      await withUpdateWork(() => toggleInspection(id));
       if (navigator.onLine) void sync.retry();
-
-      setInspections((prevInspections) =>
-        prevInspections.map((item) =>
-          item.id === id ? updatedInspection : item,
-        ),
-      );
     } catch (error) {
       console.error("Failed to update inspection:", error);
-    }
+    } finally { await refresh(); }
   }
 
   async function addInspection() {
@@ -172,7 +155,7 @@ function App() {
       await withUpdateWork(() => saveInspectionWithSync(newInspection, "CREATE"));
       if (navigator.onLine) void sync.retry();
 
-      setInspections((prevInspections) => [...prevInspections, newInspection]);
+      await refresh();
 
       setNewTitle("");
     } catch (error) {
@@ -185,18 +168,17 @@ function App() {
       await withUpdateWork(() => deleteInspectionWithSync(id));
       if (navigator.onLine) void sync.retry();
 
-      setInspections((prevInspections) =>
-        prevInspections.filter((item) => item.id !== id),
-      );
+      await refresh();
     } catch (error) {
       console.error("Failed to delete inspection:", error);
     }
   }
 
-  async function changeInspectionTitle(id: string, title: string) {
-    const result = await withUpdateWork(() => renameInspection(id, title));
-    setInspections((items) => items.map((item) => item.id === id ? result.inspection : item));
-    if (result.changed && navigator.onLine) void sync.retry();
+  async function changeInspectionTitle(id: string, title: string, expectedTitle: string) {
+    try {
+      const result = await withUpdateWork(() => renameInspection(id, title, expectedTitle));
+      if (result.changed && navigator.onLine) void sync.retry();
+    } finally { await refresh(); }
   }
 
   async function handleExport() {
@@ -289,14 +271,15 @@ function App() {
               {inspections.length > 0 && filteredInspections.length === 0 &&
                 <p className="empty-message">No inspections match your search and status filter.</p>}
             </div>
-            {inspections.length === 0 && <p className="empty-message">No inspections yet. Add one to get started.</p>}
+            {refreshError && <p role="alert">{refreshError}</p>}
+            {inspections.length === 0 && <p className="empty-message">{rows.some(row => row.deleted) ? "No current inspections. An unsaved draft is retained below." : "No inspections yet. Add one to get started."}</p>}
             <div className="inspection-cards">
-              {filteredInspections.map((inspection) => (
+              {rows.filter(row => row.editing || (!row.deleted && filteredInspections.some(item => item.id === row.inspection.id))).map(({ inspection, deleted }) => (
                 <section className="inspection-card" key={inspection.id}>
-                  <InspectionCard title={inspection.title} status={inspection.status}
+                  <InspectionCard deleted={deleted} onEditing={(editing) => edit(inspection.id, editing)} title={inspection.title} status={inspection.status}
                     onToggleStatus={() => toggleInspectionStatus(inspection.id)}
                     onDelete={() => deleteInspection(inspection.id)}
-                    onRename={(title) => changeInspectionTitle(inspection.id, title)} />
+                    onRename={(title, expectedTitle) => changeInspectionTitle(inspection.id, title, expectedTitle)} />
                 </section>
               ))}
             </div>
@@ -328,7 +311,7 @@ function App() {
             <h2 id="data-heading">Import &amp; export</h2>
             <ImportInspections onImported={async () => {
               if (navigator.onLine) void sync.retry();
-              setInspections(await loadInspections());
+              await refresh();
             }} />
             <button disabled={exporting} onClick={() => void handleExport()}>Export inspections</button>
             <div aria-live="polite">

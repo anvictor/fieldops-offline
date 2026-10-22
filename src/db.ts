@@ -58,19 +58,25 @@ async function transaction<T>(stores: string[], mode: IDBTransactionMode,
 }
 
 function notifyQueueChanged() {
-  for (const listener of listeners) listener();
-  // Notification only: receivers always reread IndexedDB, never a supplied count.
-  if (typeof BroadcastChannel !== "undefined") {
-    const channel = new BroadcastChannel(QUEUE_CHANNEL);
-    channel.postMessage("changed");
-    channel.close();
-  }
+  // Persistence already committed: a failed notification must not fail the mutation.
+  for (const listener of listeners) { try { listener(); } catch { /* Other subscribers still run. */ } }
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      const channel = new BroadcastChannel(QUEUE_CHANNEL);
+      try { channel.postMessage("changed"); } finally { channel.close(); }
+    }
+  } catch { /* Focus/visible resume rereads IndexedDB if notification is unavailable. */ }
 }
 
 export function subscribeQueueChanges(listener: () => void): () => void {
   listeners.add(listener);
-  const channel = typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(QUEUE_CHANNEL);
-  if (channel) channel.onmessage = () => listener();
+  let channel: BroadcastChannel | null = null;
+  try {
+    if (typeof BroadcastChannel !== "undefined") {
+      channel = new BroadcastChannel(QUEUE_CHANNEL);
+      channel.onmessage = () => listener();
+    }
+  } catch { /* Same-tab listeners and focus fallback still work. */ }
   return () => { listeners.delete(listener); channel?.close(); };
 }
 
@@ -109,7 +115,10 @@ async function mutateWithSync(entityId: string, operation: SyncQueueItem["operat
 }
 
 export function saveInspectionWithSync(inspection: StoredInspection, operation: "CREATE" | "UPDATE"): Promise<void> {
-  return mutateWithSync(inspection.id, operation, inspection);
+  const snapshot = structuredClone(inspection);
+  return operation === "UPDATE"
+    ? updateInspectionWithSync(snapshot.id, () => snapshot, true).then(() => undefined)
+    : mutateWithSync(snapshot.id, operation, snapshot);
 }
 export function deleteInspectionWithSync(id: string): Promise<void> {
   return mutateWithSync(id, "DELETE", null);
@@ -197,4 +206,48 @@ export function previewInspectionBatch(records: StoredInspection[]): Promise<Imp
 }
 export function importInspectionBatch(records: StoredInspection[]): Promise<ImportCounts> {
   return inspectionBatch(records, true);
+}
+
+export class InspectionUnavailableError extends Error {
+  constructor() { super("This inspection was deleted in another tab. Copy your draft before dismissing it."); }
+}
+export class InspectionConflictError extends Error {
+  constructor() { super("The title changed in another tab. Copy your draft, then cancel and reopen the editor to use the latest title."); }
+}
+
+// Read, validate and patch current fields inside the same serialized write transaction.
+export async function updateInspectionWithSync(id: string, update: (current: StoredInspection) => StoredInspection, enqueueUnchanged = false) {
+  let failure: unknown;
+  let result: { inspection: StoredInspection; changed: boolean };
+  try {
+    result = await transaction(["inspections", "syncQueue", "syncMetadata"], "readwrite", (tx, done) => {
+      const store = tx.objectStore("inspections");
+      const current = store.get(id);
+      current.onsuccess = () => {
+        try {
+          if (!current.result) throw new InspectionUnavailableError();
+          const before = current.result as StoredInspection;
+          const inspection = update(structuredClone(before));
+          if (inspection.id !== id) throw new Error("Inspection identity cannot change.");
+          const changed = enqueueUnchanged || before.title !== inspection.title || before.status !== inspection.status;
+          done({ inspection, changed });
+          if (!changed) return;
+          const metadata = tx.objectStore("syncMetadata");
+          const next = metadata.get("nextSequence");
+          next.onsuccess = () => {
+            try {
+              const sequence = next.result ?? 1;
+              if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid queue sequence.");
+              store.put(inspection);
+              tx.objectStore("syncQueue").add({ id: crypto.randomUUID(), entityType: "inspection", entityId: id,
+                operation: "UPDATE", payload: structuredClone(inspection), createdAt: new Date().toISOString(), sequence });
+              metadata.put(sequence + 1, "nextSequence");
+            } catch (error) { failure = error; tx.abort(); }
+          };
+        } catch (error) { failure = error; tx.abort(); }
+      };
+    });
+  } catch (error) { throw failure ?? error; }
+  if (result.changed) notifyQueueChanged();
+  return result;
 }

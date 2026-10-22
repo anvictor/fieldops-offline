@@ -175,3 +175,8 @@ Finish or cancel create/rename/token input and import previews, and wait for loc
 Run `npm run test:pwa-update` for an isolated two-production-version browser check (idle discovery, dirty/busy guards, Later, single-tab consent, multi-tab draft preservation and offline reopening). It uses the pinned Playwright Chromium; `SMOKE_BROWSER_EXECUTABLE` can select an already installed browser. All records and tokens are synthetic and API requests are blocked.
 
 First-visit tabs can remain uncontrolled after the initial worker installation. Later worker replacements still show the update banner, including replacements that activate without a controller change. First installation alone does not prompt or reload. An already open version with a faulty/missing updater needs a one-time user-chosen reload after saving or copying unsaved form input; a deployment cannot replace its running JavaScript.
+
+
+Local inspection changes also refresh other same-origin tabs through notification-only BroadcastChannel messages and IndexedDB rereads. Focus/visible resume provides a fallback. Unsaved editors keep their text through refreshes. If an edited inspection is deleted elsewhere, its recovery card remains until Dismiss draft: copy the text first; Save is disabled. A stale title save reports a conflict instead of overwriting a title changed by another tab. This does not add multi-device synchronization or server conflict resolution.
+
+The synthetic two-tab regression runs with the existing production preview: `node scripts/cross-tab-smoke.mjs`. It blocks service workers/API requests and uses disposable local storage; existing PWA tests separately cover offline shell behavior.

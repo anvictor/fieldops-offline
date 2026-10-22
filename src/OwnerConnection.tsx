@@ -30,7 +30,7 @@ export function OwnerConnection({ connected, available, unavailableReason, conne
 
   return <aside className="owner-connection" aria-label="Private synchronization">
     <h3>Private synchronization</h3>
-    <p>Connecting sends pending inspections to your configured API. The owner token grants access to all inspections on that API; keep it private.</p>
+    <p>Connecting sends pending inspections and checks server changes. While connected, activity may check again at most once every 30 seconds on this browser. The owner token grants access to all inspections on that API; keep it private.</p>
     <p>The token stays in this tab’s memory. Reloading or disconnecting clears it. Local inspections stay on this device.</p>
     {connected ? <>
       <p>Owner token entered for this tab.</p>

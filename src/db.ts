@@ -98,19 +98,24 @@ async function mutateWithSync(entityId: string, operation: SyncQueueItem["operat
   // Capture the payload before opening the database: later caller edits cannot change it.
   const item: SyncQueueItem = { id: crypto.randomUUID(), entityType: "inspection", entityId,
     operation, payload: structuredClone(payload), createdAt: new Date().toISOString() };
-  await transaction<void>(["inspections", "syncQueue", "syncMetadata"], "readwrite", (tx) => {
-    const metadata = tx.objectStore("syncMetadata");
-    const request = metadata.get("nextSequence");
-    request.onsuccess = () => {
-      const sequence = request.result ?? 1;
-      if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) { tx.abort(); return; }
-      item.sequence = sequence;
-      metadata.put(sequence + 1, "nextSequence");
-      const store = tx.objectStore("inspections");
-      if (item.operation === "DELETE") store.delete(entityId); else store.put(item.payload);
-      tx.objectStore("syncQueue").add(item);
-    };
-  });
+  let retiredOperation = false;
+  try {
+    await transaction<void>(["inspections", "syncQueue", "syncMetadata"], "readwrite", (tx) => {
+      const metadata = tx.objectStore("syncMetadata");
+      const retired = metadata.get("remoteDeletedIds");
+      const request = metadata.get("nextSequence");
+      request.onsuccess = () => {
+        if (operation !== "DELETE" && (retired.result ?? []).includes(entityId)) { retiredOperation = true; tx.abort(); return; }
+        const sequence = request.result ?? 1;
+        if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) { tx.abort(); return; }
+        item.sequence = sequence;
+        metadata.put(sequence + 1, "nextSequence");
+        const store = tx.objectStore("inspections");
+        if (item.operation === "DELETE") store.delete(entityId); else store.put(item.payload);
+        tx.objectStore("syncQueue").add(item);
+      };
+    });
+  } catch (error) { if (retiredOperation) throw new InspectionUnavailableError(); throw error; }
   notifyQueueChanged();
 }
 
@@ -160,9 +165,11 @@ async function inspectionBatch(records: StoredInspection[], commit: boolean): Pr
     commit ? "readwrite" : "readonly", (tx, result) => {
       const inspections = tx.objectStore("inspections");
       const queue = tx.objectStore("syncQueue");
+      const retired = tx.objectStore("syncMetadata").get("remoteDeletedIds");
       const stored = inspections.getAll();
       stored.onsuccess = () => {
         const reserved = new Set<string>(stored.result.map((record: StoredInspection) => record.id.toLowerCase()));
+        for (const id of retired.result ?? []) reserved.add(id);
         const pending = queue.getAll();
         pending.onsuccess = () => {
           for (const item of pending.result as SyncQueueItem[]) {
@@ -209,7 +216,7 @@ export function importInspectionBatch(records: StoredInspection[]): Promise<Impo
 }
 
 export class InspectionUnavailableError extends Error {
-  constructor() { super("This inspection was deleted in another tab. Copy your draft before dismissing it."); }
+  constructor() { super("This inspection was deleted in another tab or device. Copy your draft before dismissing it."); }
 }
 export class InspectionConflictError extends Error {
   constructor() { super("The title changed in another tab. Copy your draft, then cancel and reopen the editor to use the latest title."); }
@@ -224,30 +231,84 @@ export async function updateInspectionWithSync(id: string, update: (current: Sto
       const store = tx.objectStore("inspections");
       const current = store.get(id);
       current.onsuccess = () => {
-        try {
-          if (!current.result) throw new InspectionUnavailableError();
-          const before = current.result as StoredInspection;
-          const inspection = update(structuredClone(before));
-          if (inspection.id !== id) throw new Error("Inspection identity cannot change.");
-          const changed = enqueueUnchanged || before.title !== inspection.title || before.status !== inspection.status;
-          done({ inspection, changed });
-          if (!changed) return;
-          const metadata = tx.objectStore("syncMetadata");
-          const next = metadata.get("nextSequence");
-          next.onsuccess = () => {
-            try {
-              const sequence = next.result ?? 1;
-              if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid queue sequence.");
-              store.put(inspection);
-              tx.objectStore("syncQueue").add({ id: crypto.randomUUID(), entityType: "inspection", entityId: id,
-                operation: "UPDATE", payload: structuredClone(inspection), createdAt: new Date().toISOString(), sequence });
-              metadata.put(sequence + 1, "nextSequence");
-            } catch (error) { failure = error; tx.abort(); }
-          };
-        } catch (error) { failure = error; tx.abort(); }
+        const retired = tx.objectStore("syncMetadata").get("remoteDeletedIds");
+        retired.onsuccess = () => {
+          try {
+            if ((retired.result ?? []).includes(id)) throw new InspectionUnavailableError();
+            if (!current.result) throw new InspectionUnavailableError();
+            const before = current.result as StoredInspection;
+            const inspection = update(structuredClone(before));
+            if (inspection.id !== id) throw new Error("Inspection identity cannot change.");
+            const changed = enqueueUnchanged || before.title !== inspection.title || before.status !== inspection.status;
+            done({ inspection, changed });
+            if (!changed) return;
+            const metadata = tx.objectStore("syncMetadata");
+            const next = metadata.get("nextSequence");
+            next.onsuccess = () => {
+              try {
+                const sequence = next.result ?? 1;
+                if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid queue sequence.");
+                store.put(inspection);
+                tx.objectStore("syncQueue").add({ id: crypto.randomUUID(), entityType: "inspection", entityId: id,
+                  operation: "UPDATE", payload: structuredClone(inspection), createdAt: new Date().toISOString(), sequence });
+                metadata.put(sequence + 1, "nextSequence");
+              } catch (error) { failure = error; tx.abort(); }
+            };
+          } catch (error) { failure = error; tx.abort(); }
+        };
       };
     });
   } catch (error) { throw failure ?? error; }
   if (result.changed) notifyQueueChanged();
   return result;
+}
+
+export const REMOTE_INTERVAL = 30000;
+const retiredKey = "remoteDeletedIds";
+
+// Caller holds SYNC_LOCK. Reserve before HTTP, including failures and reloads.
+export function reserveRemoteCheck(base: string, now: number, signal: AbortSignal): Promise<boolean> {
+  return transaction(["syncMetadata"], "readwrite", (tx, done) => {
+    const store = tx.objectStore("syncMetadata");
+    const key = `remoteCheck:${base}`;
+    const request = store.get(key);
+    request.onsuccess = () => {
+      const previous = request.result;
+      if (previous !== undefined && (!Number.isFinite(previous) || previous > now || previous < 0)) {
+        store.put(now, key); done(false); return;
+      }
+      if (previous !== undefined && now - previous < REMOTE_INTERVAL) { done(false); return; }
+      store.put(now, key); done(true);
+    };
+  }, signal);
+}
+
+export async function applyRemoteSnapshot(snapshot: { inspections: StoredInspection[]; deletedIds: string[] }, signal: AbortSignal) {
+  await transaction<void>(["inspections", "syncQueue", "syncMetadata"], "readwrite", (tx) => {
+    const inspections = tx.objectStore("inspections");
+    const metadata = tx.objectStore("syncMetadata");
+    const retired = metadata.get(retiredKey);
+    const pending = tx.objectStore("syncQueue").getAll();
+    pending.onsuccess = () => {
+      try {
+      if (signal.aborted) { tx.abort(); return; }
+      const blocked = new Set((pending.result as SyncQueueItem[]).map(item => item.entityId));
+      const deleted = new Set<string>([...(retired.result ?? []), ...snapshot.deletedIds]);
+      for (const id of deleted) inspections.delete(id);
+      for (const row of snapshot.inspections) {
+        if (!blocked.has(row.id) && !deleted.has(row.id)) inspections.put(row);
+      }
+      metadata.put([...deleted], retiredKey);
+      } catch { try { tx.abort(); } catch { /* Already aborted. */ } }
+    };
+  }, signal);
+  notifyQueueChanged();
+}
+
+// Persist completion as well: slow reads/DB waits cannot permit a closely following GET.
+// Rate-only metadata outlives a cancelled credential generation; no response data is applied here.
+export function finishRemoteCheck(base: string, now: number): Promise<void> {
+  return transaction(["syncMetadata"], "readwrite", (tx) => {
+    tx.objectStore("syncMetadata").put(now, `remoteCheck:${base}`);
+  });
 }

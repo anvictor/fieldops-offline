@@ -1,18 +1,25 @@
-import { loadSyncQueue, removeQueueItem, subscribeQueueChanges } from "./db";
+import { fetchSnapshot } from "./remoteApi";
+import { loadSyncQueue, removeQueueItem, subscribeQueueChanges, applyRemoteSnapshot, reserveRemoteCheck, finishRemoteCheck, REMOTE_INTERVAL } from "./db";
 import type { SyncQueueItem } from "./db";
-import { sendQueueItem, SyncFailure, AuthenticationFailure } from "./api";
+import { sendQueueItem, SyncFailure, AuthenticationFailure, RemoteDeletionFailure } from "./api";
 import type { ApiConfig } from "./api";
 
 export const SYNC_LOCK = "fieldops-inspection-sync";
 export type SyncState = {
+  checking: boolean;
+  remoteError: string | null;
   connected: boolean;
   pendingCount: number;
   syncing: boolean;
   unavailable: string | null;
-  error: { message: string; permanent: boolean; itemId: string | null; authentication?: boolean } | null;
+  error: { message: string; permanent: boolean; itemId: string | null; authentication?: boolean; recoveryTitle?: string } | null;
 };
 // Dependencies make the coordinator testable without replacing its lock/abort lifecycle.
 type Options = {
+  remote?: boolean;
+  visible?: () => boolean;
+  now?: () => number;
+  snapshot?: typeof fetchSnapshot;
   config: ApiConfig;
   requireCredential?: boolean;
   locks: Pick<LockManager, "request"> | undefined;
@@ -31,7 +38,7 @@ export function createSyncManager(options: Options) {
   let credentialVersion = 0;
   const configurationReason = !options.locks ? "Synchronization unavailable in this browser" : options.config.reason;
   const disconnected = "Connect with your owner token to synchronize pending operations.";
-  let state: SyncState = { connected: false, pendingCount: 0, syncing: false, error: null,
+  let state: SyncState = { checking: false, remoteError: null, connected: false, pendingCount: 0, syncing: false, error: null,
     unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) };
   const listeners = new Set<() => void>();
   const publish = (update: Partial<SyncState>) => {
@@ -45,6 +52,53 @@ export function createSyncManager(options: Options) {
   let unsubscribe: (() => void) | undefined;
   let refreshVersion = 0;
   const isCurrent = (owner: AbortSignal) => owner === lifetime.signal && !owner.aborted;
+  let remoteActive: Promise<void> | null = null;
+  let remoteController: AbortController | null = null;
+  let lastRemoteAttempt = -Infinity;
+  function pull(): Promise<void> {
+    const now = (options.now ?? Date.now)();
+    if (lastRemoteAttempt > now) lastRemoteAttempt = -Infinity;
+    if (!options.remote || lifetime.signal.aborted || configurationReason || state.error?.authentication || !options.online() ||
+        options.visible?.() === false || (options.requireCredential && !token) || active || remoteActive ||
+        now - lastRemoteAttempt < REMOTE_INTERVAL) return Promise.resolve();
+    lastRemoteAttempt = now;
+    const owner = lifetime.signal;
+    const generation = credentialVersion;
+    const base = options.config.base!;
+    const controller = new AbortController();
+    remoteController = controller;
+    const signal = controller.signal;
+    const abort = () => controller.abort();
+    owner.addEventListener("abort", abort, { once: true });
+    const current = () => isCurrent(owner) && !signal.aborted && generation === credentialVersion &&
+      base === options.config.base && options.online() && options.visible?.() !== false;
+    const work = options.locks!.request(SYNC_LOCK, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock || !current()) return;
+      if (!await reserveRemoteCheck(base, (options.now ?? Date.now)(), signal) || !current()) return;
+      publish({ checking: true });
+      try {
+        const snapshot = await (options.snapshot ?? fetchSnapshot)(base, signal, options.requireCredential ? () => token : undefined);
+        if (!current()) return;
+        await applyRemoteSnapshot(snapshot, signal);
+        if (current()) publish({ remoteError: null });
+      } catch (error) {
+        if (current()) publish({ remoteError: error instanceof SyncFailure ? error.message : "Could not check server changes. Local data was kept." });
+      } finally {
+        try { await finishRemoteCheck(base, (options.now ?? Date.now)()); }
+        catch { if (current()) publish({ remoteError: "Could not preserve the check interval. Try later activity." }); }
+      }
+    }).catch(() => {
+      if (current()) publish({ remoteError: "Could not check server changes safely. Try later activity." });
+    });
+    remoteActive = work.finally(() => {
+      owner.removeEventListener("abort", abort);
+      if (remoteController === controller) {
+        remoteController = null; remoteActive = null;
+        if (isCurrent(owner)) { publish({ checking: false }); void trigger(); }
+      }
+    });
+    return remoteActive;
+  }
   async function refresh(signal = lifetime.signal) {
     if (!isCurrent(signal)) return;
     const version = ++refreshVersion;
@@ -85,11 +139,17 @@ export function createSyncManager(options: Options) {
           await refresh(owner);
         }
       } catch (error) {
+        let failure = error;
+        if (!signal.aborted && item && error instanceof RemoteDeletionFailure) {
+          try { await applyRemoteSnapshot({ inspections: [], deletedIds: [item.entityId] }, signal); }
+          catch { failure = new SyncFailure("Could not save server deletion locally. Retry safely.", false); }
+        }
         if (!signal.aborted) publish({ error: {
-          message: error instanceof SyncFailure ? error.message : "Could not confirm the local queue update. Retry safely.",
-          permanent: error instanceof SyncFailure && error.permanent,
+          message: failure instanceof SyncFailure ? failure.message : "Could not confirm the local queue update. Retry safely.",
+          permanent: failure instanceof SyncFailure && failure.permanent,
           itemId: item?.id ?? null,
-          authentication: error instanceof AuthenticationFailure,
+          authentication: failure instanceof AuthenticationFailure,
+          recoveryTitle: error instanceof RemoteDeletionFailure ? item?.payload?.title : undefined,
         } });
       } finally {
         if (isCurrent(owner)) { publish({ syncing: false }); await refresh(owner); }
@@ -109,17 +169,25 @@ export function createSyncManager(options: Options) {
   }
 
   return {
+    pull,
+    pauseReads() { remoteController?.abort(); },
     getSnapshot: () => state,
     async setCredential(value: string | null) {
       if (!options.requireCredential) return false;
       if (value !== null && (!/^[A-Za-z0-9_-]{43,128}$/.test(value) || configurationReason || !options.config.base?.startsWith("https://"))) return false;
       const version = ++credentialVersion;
       runController?.abort();
+      remoteController?.abort();
       rerun = false;
       token = value;
-      publish({ connected: value !== null, error: null, unavailable: configurationReason ?? (value ? null : disconnected) });
+      publish({ connected: value !== null, error: null, remoteError: null, unavailable: configurationReason ?? (value ? null : disconnected) });
       if (active) await active;
-      if (version === credentialVersion && token) await trigger();
+      if (remoteActive) await remoteActive;
+      if (version === credentialVersion && token) {
+        await trigger();
+        while (active && version === credentialVersion && token) await active;
+        if (version === credentialVersion && token) await pull();
+      }
       return true;
     },
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -135,8 +203,8 @@ export function createSyncManager(options: Options) {
       void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
     },
     // Keep active until the lock request settles: abort does not release a held Web Lock.
-    stop() { lifetime.abort(); unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
-    pause() { runController?.abort(); },
+    stop() { lifetime.abort(); remoteController?.abort(); unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, checking: false, remoteError: null, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
+    pause() { runController?.abort(); remoteController?.abort(); },
     trigger,
     async retry() {
       const owner = lifetime.signal;

@@ -23,8 +23,8 @@ explainable; ESLint is configured, no dedicated formatter is configured.
 ## Offline and replay invariants
 
 - Offline inspection CRUD persists in IndexedDB. Local mutations and immutable
-  queued payload snapshots commit atomically. Never overwrite local inspections
-  from API responses or incidentally change IndexedDB schema.
+  queued payload snapshots commit atomically. Never overwrite pending local changes
+  from upload acknowledgments or incidentally change IndexedDB schema.
 - v2 records a durable next-sequence counter. New entries replay by sequence;
   unchanged v1 entries replay first by createdAt then ID. Historical insertion
   order cannot be recovered. Queue operations are not compacted.
@@ -43,8 +43,7 @@ explainable; ESLint is configured, no dedicated formatter is configured.
 - Web Locks unavailable disables sync while offline CRUD continues. Close older
   tabs for blocked upgrades. Titles trim to 1–200 Unicode characters, no null.
 - One logical writer per inspection is assumed. No server fencing of stale
-  requests surviving context termination, exactly-once guarantee, initial server
-  download or multi-device conflict resolution is implemented.
+  requests surviving context termination, exactly-once guarantee, general multi-device concurrent-edit conflict resolution is implemented. Activity-driven snapshots now download server state and explicit deletions; see the current README activity section.
 
 ## Pages, PWA and API boundaries
 
@@ -63,3 +62,6 @@ uses the Vite proxy to the loopback API. Production without valid build-time
 The optional public HTTP(S) base excludes `/api`, credentials, query and fragment;
 trailing slashes normalize. It is public configuration, never a secret. A valid URL supplies no hosting/CORS/reachability guarantee. Production owner synchronization requires a configured HTTPS base and runtime token entered in the PWA. The token lives only in tab memory, clears on disconnect/reload, and never enters IndexedDB, queue payloads, browser durable storage or build assets. Connect resumes FIFO; Disconnect aborts active work without dropping queued items; auth failures do not enable Discard. Each tab connects separately.
 Read [CONVENTIONS.md](../../CONVENTIONS.md) for deployment decisions and live checks.
+
+
+Activity-driven reads share the sync lock and a durable30second per-API reservation across tabs/reloads. Only eligible user pointer/key/scroll/focus/visible events or explicit Connect trigger a read, never an idle read timer or online-alone event. GET errors keep local data; responses are fully validated. Pending IDs shield active records; explicit retired IDs remove live rows but preserve queued payloads and editor recovery drafts. Apply rechecks abort/credential generation. Read-rate metadata contains no token and the completion stamp also prevents bursts after slow reads. Server tombstones prevent late CREATE resurrection; this does not add general edit version fencing. Upload retries and PWA checks are separate from snapshot-read throttling.

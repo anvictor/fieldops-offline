@@ -70,8 +70,7 @@ CDN cache behavior, and apply remaining Blueprint settings in Dashboard if neede
 Enter the API's private owner token in the PWA password field and press Connect.
 This sends the existing queued operations to that configured API. Anyone holding
 the token can access the same server inspection data: do not distribute it as a
-recruiter credential. There are no separate accounts, initial server download,
-multi-device conflict resolution or exactly-once delivery.
+recruiter credential. There are no separate accounts, general concurrent-edit conflict resolution or exactly-once delivery. Connected devices may receive activity-driven snapshots and explicit server deletions.
 
 The token lives only in the tab's memory; no durable browser store, queue, export,
 URL or log contains it. Reloading and Disconnect clear it. Offline local CRUD
@@ -122,3 +121,8 @@ token, create/update inspections, verify corresponding Neon rows, queue offline
 changes/reconnect and delete only those synthetic rows. Record direct hosted evidence
 separately from local tests. A health response or green build is not full sync evidence.
 TASK-016 was reconciled to done by [PR #37](https://github.com/anvictor/fieldops-offline/pull/37) after its successful deployment/live checks. Subsequent tasks follow the same reviewed completion gates.
+
+
+### TASK021 rollout order
+
+Deploy API/migration002 first using the existing release.sh migration step. The additive tombstone table protects retired UUIDs from late CREATE replay; existing clients keep CRUD response compatibility. Verify backend liveness and anonymous snapshot401 without fetching secrets or changing production inspections. Then deploy the frontend snapshot/activity client and verify its exact build marker/anonymous offline behavior. Authenticated two-device mutation proof belongs to disposable PostgreSQL/browser fixtures; live same-owner device verification is user-operated. No metadata-only frontend deploy or credential rotation is required.

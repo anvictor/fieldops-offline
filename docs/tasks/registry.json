@@ -143,10 +143,10 @@
     },
     {
       "id": "TASK-021",
-      "status": "in_progress",
+      "status": "in_review",
       "spec": "docs/tasks/021-activity-server-refresh.md",
       "branch": "codex/021-activity-server-refresh",
-      "pr": null
+      "pr": 48
     }
   ]
 }

@@ -24,6 +24,10 @@ export class SyncFailure extends Error {
   constructor(message: string, permanent: boolean) { super(message); this.permanent = permanent; }
 }
 
+export class RemoteDeletionFailure extends SyncFailure {
+  constructor() { super("This inspection was deleted on the server. Pending changes are retained for review or discard.", true); }
+}
+
 export class AuthenticationFailure extends SyncFailure {
   constructor(message: string) { super(message, true); }
 }
@@ -100,7 +104,8 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
         const error = data.error as { code?: unknown; message?: unknown } | undefined;
         const missing = response.status === 404 && error?.code === "INSPECTION_NOT_FOUND" && typeof error.message === "string";
         if (item.operation === "DELETE" && missing) return;
-        if (item.operation === "UPDATE" && missing) throw new SyncFailure("Server inspection is missing. Operation blocked.", true);
+        if (item.operation === "UPDATE" && missing) throw new RemoteDeletionFailure();
+        if (response.status === 409 && error?.code === "INSPECTION_DELETED") throw new RemoteDeletionFailure();
         if (response.status === 409 && error?.code === "ID_CONFLICT") throw new SyncFailure("Inspection ID conflicts with server content. Operation blocked.", true);
         if (!response.ok) throw new SyncFailure("Server rejected the operation. Review or discard it to continue.", true);
         const expectedStatus = item.operation === "CREATE" ? [200, 201] : [200];

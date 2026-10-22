@@ -1,3 +1,4 @@
+import { checkDevices } from "./device-browser-smoke.mjs";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -119,6 +120,8 @@ try {
   assert.equal((await fetch(api + "/api/inspections")).status, 401);
   assert.equal((await fetch(api + "/api/inspections", { headers: { Authorization: `Bearer ${token}`, Origin: "https://denied.test" } })).status, 403);
   checks.push("browser deletion, anonymous 401 and forbidden-origin 403");
+  phase = "two-device activity and deletion";
+  checks.push(...await checkDevices({ browser, origin, apiOrigin, api, token, pool }));
   phase = "secret-free evidence";
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await mkdir("smoke-results", { recursive: true });

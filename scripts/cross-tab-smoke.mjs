@@ -67,7 +67,7 @@ try {
   await card(b).getByText(/The title changed in another tab/).waitFor();
   assert.deepEqual(await snapshot(b), conflictBefore);
   await card(a).getByRole("button", { name: "Delete inspection", exact: true }).click();
-  await card(b).getByText(/This inspection was deleted in another tab/).waitFor();
+  await card(b).getByText(/This inspection was deleted in another tab or device/).waitFor();
   assert.equal(await card(b).getByLabel("Inspection title", { exact: true }).inputValue(), "My unsaved long draft 💧");
   assert.equal(await b.getByLabel("New inspection title", { exact: true }).inputValue(), "Unrelated unsaved creation");
   assert.equal(await card(b).getByRole("button", { name: "Save title", exact: true }).isDisabled(), true);
@@ -97,10 +97,10 @@ try {
   await card(a).waitFor({ state: "detached" });
   const before = await snapshot(a);
   assert.equal(await card(b).getByRole("button", { name: "Save title", exact: true }).isEnabled(), true);
-  assert.equal(await card(b).getByText(/This inspection was deleted in another tab/).count(), 0);
+  assert.equal(await card(b).getByText(/This inspection was deleted in another tab or device/).count(), 0);
   // Programmatic submit avoids a focus event reread: Save must itself detect deletion.
   await card(b).locator("form").evaluate(form => form.requestSubmit());
-  await card(b).getByText(/This inspection was deleted in another tab/).waitFor();
+  await card(b).getByText(/This inspection was deleted in another tab or device/).waitFor();
   assert.equal(await card(b).getByLabel("Inspection title", { exact: true }).inputValue(), "Late draft");
   assert.deepEqual(await snapshot(b), before);
   checks.push("Suppressed BroadcastChannel: late Save detects deletion transactionally, no resurrection/queue/metadata writes");

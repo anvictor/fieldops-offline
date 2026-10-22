@@ -9,6 +9,7 @@ import { useInspections } from "./hooks/useInspections";
 import { renameInspection, toggleInspection } from "./inspections";
 import { exportInspections } from "./export";
 import { normalizeTitle, resolveApiConfig } from "./api";
+import { subscribeActivity } from "./activity";
 import { createSyncManager } from "./sync";
 import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
@@ -92,7 +93,7 @@ function InspectionCard({
         <button type="button" disabled={saving} onClick={() => { setEditing(false); setError(""); onEditing(false); }}>{unavailable ? "Dismiss draft" : "Cancel"}</button>
         {!validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
         <div aria-live="polite">{saving && <p>Saving title…</p>}</div>
-        {unavailable ? <p role="alert">This inspection was deleted in another tab. Copy your draft before dismissing it.</p> : error && <p role="alert">{error}</p>}
+        {unavailable ? <p role="alert">This inspection was deleted in another tab or device. Copy your draft before dismissing it.</p> : error && <p role="alert">{error}</p>}
       </form> : <button onClick={() => { setDraftTitle(title); setOriginalTitle(title); setError(""); setEditing(true); onEditing(true); }}>Edit title</button>}
       <button disabled={saving || unavailable} onClick={onToggleStatus}>
         {status === "draft" ? "Complete inspection" : "Reopen inspection"}
@@ -114,6 +115,8 @@ function App() {
     "all",
   );
   const [sync] = useState(() => createSyncManager({
+    remote: true,
+    visible: () => document.visibilityState === "visible",
     requireCredential: !import.meta.env.DEV,
     config: resolveApiConfig(import.meta.env.DEV, import.meta.env.VITE_API_BASE_URL),
     locks: navigator.locks,
@@ -122,7 +125,7 @@ function App() {
   const syncState = useSyncExternalStore(sync.subscribe, sync.getSnapshot);
   const validTitle = normalizeTitle(newTitle);
   const isOnline = useOnlineStatus();
-  useUpdateBlocker(newTitle.length > 0 || exporting || syncState.syncing);
+  useUpdateBlocker(newTitle.length > 0 || exporting || syncState.syncing || syncState.checking);
 
   useEffect(() => {
     sync.start();
@@ -131,6 +134,7 @@ function App() {
   useEffect(() => {
     if (isOnline) void sync.retry(); else sync.pause();
   }, [isOnline, sync]);
+  useEffect(() => subscribeActivity(window, document, () => { void sync.pull(); }, () => sync.pauseReads()), [sync]);
   async function toggleInspectionStatus(id: string) {
     try {
       await withUpdateWork(() => toggleInspection(id));
@@ -292,8 +296,11 @@ function App() {
             <p className="pending-count">Pending sync: {syncState.pendingCount}</p>
             <div aria-live="polite">
               {syncState.syncing && <p>Synchronizing…</p>}
+              {syncState.checking && <p>Checking server changes…</p>}
+              {syncState.remoteError && <p role="alert">{syncState.remoteError}</p>}
               {syncState.unavailable && <p>{syncState.unavailable}</p>}
               {syncState.error && <p role="alert">Synchronization error: {syncState.error.message}</p>}
+              {syncState.error?.recoveryTitle && <p>Pending title to copy: {syncState.error.recoveryTitle}</p>}
             </div>
             <div className="sync-actions">
               <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}

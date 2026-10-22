@@ -37,7 +37,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     await t.test("migration applies once and reruns without changing data", async () => {
       await migrate(pool);
       await migrate(pool);
-      assert.equal((await pool.query("SELECT * FROM schema_migrations")).rowCount, 1);
+      assert.equal((await pool.query("SELECT * FROM schema_migrations")).rowCount, 2);
     });
     await t.test("health and empty collection", async () => {
       const health = await request("/api/health");
@@ -182,6 +182,32 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
         await request(`/api/inspections/${clientId}`, "DELETE");
       }
     });
+    await t.test("deleted UUIDs reject late CREATE replay and PATCH; snapshot reports explicit tombstones", async () => {
+      const retired = randomUUID();
+      assert.equal((await request("/api/inspections", "POST", { id: retired, title: "Retired" })).status, 201);
+      assert.equal((await request(`/api/inspections/${retired}`, "DELETE")).status, 204);
+      await expectError(await request("/api/inspections", "POST", { id: retired, title: "Retired" }), 409, "INSPECTION_DELETED");
+      await expectError(await request(`/api/inspections/${retired}`, "PATCH", { title: "Late edit" }), 404, "INSPECTION_NOT_FOUND");
+      const snapshot = await request("/api/inspections/snapshot");
+      assert.equal(snapshot.status, 200);
+      const data = await snapshot.json();
+      assert.ok(data.deletedIds.includes(retired));
+      assert.ok(!data.inspections.some((row: { id: string }) => row.id === retired));
+    });
+    await t.test("concurrent CREATE/DELETE always retires identity, including delete-before-create", async () => {
+      for (let i = 0; i < 4; i++) {
+        const retired = randomUUID();
+        await Promise.all([request("/api/inspections", "POST", { id: retired, title: "Concurrent" }), request(`/api/inspections/${retired}`, "DELETE")]);
+        await expectError(await request(`/api/inspections/${retired}`), 404, "INSPECTION_NOT_FOUND");
+        await expectError(await request("/api/inspections", "POST", { id: retired, title: "Concurrent" }), 409, "INSPECTION_DELETED");
+      }
+    });
+    await t.test("snapshot fails entirely above the private bounded collection limit", async () => {
+      const ids = Array.from({ length: 5001 }, () => randomUUID());
+      await pool.query("INSERT INTO inspection_tombstones (id) SELECT unnest($1::uuid[])", [ids]);
+      try { await expectError(await request("/api/inspections/snapshot"), 413, "SNAPSHOT_TOO_LARGE"); }
+      finally { await pool.query("DELETE FROM inspection_tombstones WHERE id = ANY($1::uuid[])", [ids]); }
+    });
     await t.test("database errors never expose SQL, stack traces, or credentials", async () => {
       await pool.query("DROP TABLE inspections");
       await expectError(await request("/api/inspections"), 500, "INTERNAL_ERROR");
@@ -216,6 +242,10 @@ await test("production owner authorization and CORS preserve PostgreSQL CRUD and
     const denied = await fetch(`${base}/api/inspections`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, title: "Private" }) });
     assert.equal(denied.status, 401);
     assert.equal((await pool.query("SELECT * FROM inspections")).rowCount, 0);
+    assert.equal((await fetch(`${base}/api/inspections/${id}`, { method: "DELETE" })).status, 401);
+    assert.equal((await fetch(`${base}/api/inspections/snapshot`)).status, 401);
+    assert.equal((await request("/api/inspections/invalid", "DELETE")).status, 400);
+    assert.equal((await pool.query("SELECT id FROM inspection_tombstones")).rowCount, 0);
     const first = await request("/api/inspections", "POST", { id, title: "Private" });
     assert.equal(first.status, 201);
     assert.equal(first.headers.get("access-control-allow-origin"), origin);

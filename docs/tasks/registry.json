@@ -147,6 +147,13 @@
       "spec": "docs/tasks/021-activity-server-refresh.md",
       "branch": "codex/021-activity-server-refresh",
       "pr": 48
+    },
+    {
+      "id": "TASK-022",
+      "status": "draft",
+      "spec": "docs/tasks/022-optimistic-concurrency.md",
+      "branch": "codex/022-optimistic-concurrency",
+      "pr": null
     }
   ]
 }

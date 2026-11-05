@@ -56,12 +56,19 @@ export function createSyncManager(options: Options) {
   let remoteActive: Promise<void> | null = null;
   let remoteController: AbortController | null = null;
   let reviewController: AbortController | null = null;
+  let checkingOwner: AbortController | null = null;
+  const beginChecking = (controller: AbortController) => { checkingOwner = controller; publish({ checking: true }); };
+  const finishChecking = (controller: AbortController) => {
+    if (checkingOwner !== controller) return;
+    checkingOwner = null;
+    publish({ checking: false });
+  };
   let lastRemoteAttempt = -Infinity;
   function pull(): Promise<void> {
     const now = (options.now ?? Date.now)();
     if (lastRemoteAttempt > now) lastRemoteAttempt = -Infinity;
     if (!options.remote || lifetime.signal.aborted || configurationReason || state.error?.authentication || !options.online() ||
-        options.visible?.() === false || (options.requireCredential && !token) || active || remoteActive ||
+        options.visible?.() === false || (options.requireCredential && !token) || active || remoteActive || reviewController || state.checking ||
         now - lastRemoteAttempt < REMOTE_INTERVAL) return Promise.resolve();
     lastRemoteAttempt = now;
     const owner = lifetime.signal;
@@ -77,7 +84,7 @@ export function createSyncManager(options: Options) {
     const work = options.locks!.request(SYNC_LOCK, { mode: "exclusive", ifAvailable: true }, async (lock) => {
       if (!lock || !current()) return;
       if (!await reserveRemoteCheck(base, (options.now ?? Date.now)(), signal) || !current()) return;
-      publish({ checking: true });
+      beginChecking(controller);
       try {
         const snapshot = await (options.snapshot ?? fetchSnapshot)(base, signal, options.requireCredential ? () => token : undefined);
         if (!current()) return;
@@ -96,7 +103,8 @@ export function createSyncManager(options: Options) {
       owner.removeEventListener("abort", abort);
       if (remoteController === controller) {
         remoteController = null; remoteActive = null;
-        if (isCurrent(owner)) { publish({ checking: false }); void trigger(); }
+        finishChecking(controller);
+        if (isCurrent(owner)) void trigger();
       }
     });
     return remoteActive;
@@ -178,14 +186,15 @@ export function createSyncManager(options: Options) {
     pauseReads() { remoteController?.abort(); reviewController?.abort(); },
     async reviewConflict() {
       const blocked = state.error;
-      if (!blocked?.conflict || !blocked.itemId || state.checking || state.syncing || state.unavailable || !options.online()) return;
+      if (lifetime.signal.aborted || !blocked?.conflict || !blocked.itemId || state.checking || remoteActive || remoteController || reviewController ||
+          state.syncing || state.unavailable || !options.online()) return;
       const owner = lifetime.signal;
       const generation = credentialVersion;
       const controller = new AbortController();
       reviewController = controller;
       const abort = () => controller.abort();
       owner.addEventListener("abort", abort, { once: true });
-      publish({ checking: true });
+      beginChecking(controller);
       try {
         await options.locks!.request(SYNC_LOCK, { mode: "exclusive", signal: controller.signal }, async () => {
           const current = await (options.review ?? fetchReviewInspection)(blocked.conflict!.pending.id,
@@ -208,7 +217,7 @@ export function createSyncManager(options: Options) {
         }
       } finally {
         owner.removeEventListener("abort", abort);
-        if (reviewController === controller) { reviewController = null; if (isCurrent(owner)) publish({ checking: false }); }
+        if (reviewController === controller) { reviewController = null; finishChecking(controller); }
       }
     },
     async saveReviewedChanges(title: string, status: StoredInspection["status"], reviewedVersion: number) {
@@ -265,7 +274,7 @@ export function createSyncManager(options: Options) {
       void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
     },
     // Keep active until the lock request settles: abort does not release a held Web Lock.
-    stop() { lifetime.abort(); remoteController?.abort(); reviewController?.abort(); unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, checking: false, remoteError: null, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
+    stop() { lifetime.abort(); remoteController?.abort(); reviewController?.abort(); checkingOwner = null; unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, checking: false, remoteError: null, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
     pause() { runController?.abort(); remoteController?.abort(); reviewController?.abort(); },
     trigger,
     async retry() {

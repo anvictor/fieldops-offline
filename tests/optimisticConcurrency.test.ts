@@ -260,3 +260,108 @@ it("opens an editor with fields and source from one coherent persisted transacti
   expect(source.inspection).toEqual({ ...row, title: "Latest title", status: "completed", version: 7 });
   expect(source.expectation).toEqual({ version: 7 });
 });
+
+function deferredReview<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+function exclusiveReviewLocks() {
+  let held = false;
+  return { request: vi.fn(async (_name: string, options: LockOptions, work: (lock: Lock | null) => Promise<void>) => {
+    if (held && options.ifAvailable) return work(null);
+    if (held) throw new Error("Unexpected overlapping lock request");
+    held = true;
+    try { await work({ name: "test", mode: "exclusive" } as Lock); } finally { held = false; }
+  }) as unknown as LockManager["request"] };
+}
+
+it("keeps manual review busy through activity and abort; skipped activity cannot release its checking owner", async () => {
+  await saveInspection(row); await renameInspection(id, "Retained draft");
+  const original = await loadSyncQueue();
+  const pendingReview = deferredReview<StoredInspection>();
+  const review = vi.fn(async () => pendingReview.promise);
+  const snapshot = vi.fn(async () => ({ inspections: [], deletedIds: [] }));
+  const manager = createSyncManager({ locks: exclusiveReviewLocks(), remote: true, online: () => true,
+    config: { base: "", reason: null }, snapshot, review,
+    send: async () => { throw new VersionConflictFailure({ ...row, version: 4 }); },
+  }); managers.push(manager); manager.start();
+  for (let i = 0; i < 50 && !manager.getSnapshot().error; i++) await tick();
+  const work = manager.reviewConflict();
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(manager.getSnapshot().checking).toBe(true);
+  await manager.pull();
+  expect(snapshot).not.toHaveBeenCalled();
+  expect(manager.getSnapshot().checking).toBe(true);
+  await manager.reviewConflict();
+  await manager.saveReviewedChanges("Cannot overlap review", "draft", 4);
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(await loadSyncQueue()).toEqual(original);
+  manager.pauseReads();
+  // Abort keeps the work busy until it has actually settled/released the lock.
+  expect(manager.getSnapshot().checking).toBe(true);
+  pendingReview.resolve({ ...row, title: "Stale aborted response", version: 99 });
+  await work;
+  expect(manager.getSnapshot().checking).toBe(false);
+  expect(manager.getSnapshot().error?.conflict?.current?.version).toBe(4);
+  await manager.pull();
+  expect(snapshot).toHaveBeenCalledTimes(1);
+  expect(manager.getSnapshot().checking).toBe(false);
+});
+
+it("does not start manual review while an activity snapshot reserves or owns the read lock", async () => {
+  await saveInspection(row); await renameInspection(id, "Retained draft");
+  const original = await loadSyncQueue();
+  const pendingSnapshot = deferredReview<{ inspections: StoredInspection[]; deletedIds: string[] }>();
+  const snapshot = vi.fn(async () => pendingSnapshot.promise);
+  const review = vi.fn(async () => ({ ...row, title: "Reviewed after snapshot", version: 4 }));
+  const manager = createSyncManager({ locks: exclusiveReviewLocks(), remote: true, online: () => true,
+    config: { base: "", reason: null }, snapshot, review,
+    send: async () => { throw new VersionConflictFailure({ ...row, version: 4 }); },
+  }); managers.push(manager); manager.start();
+  for (let i = 0; i < 50 && !manager.getSnapshot().error; i++) await tick();
+  const work = manager.pull();
+  // Reservation is asynchronous: checking is not set yet, but remoteActive owns the read.
+  await manager.reviewConflict();
+  expect(review).not.toHaveBeenCalled();
+  for (let i = 0; i < 50 && !snapshot.mock.calls.length; i++) await tick();
+  expect(manager.getSnapshot().checking).toBe(true);
+  await manager.reviewConflict();
+  await manager.saveReviewedChanges("Cannot overlap snapshot", "draft", 4);
+  expect(review).not.toHaveBeenCalled();
+  expect(await loadSyncQueue()).toEqual(original);
+  pendingSnapshot.resolve({ inspections: [], deletedIds: [] }); await work;
+  expect(manager.getSnapshot().checking).toBe(false);
+  await manager.reviewConflict();
+  expect(review).toHaveBeenCalledTimes(1);
+  expect(manager.getSnapshot().error?.conflict?.current?.title).toBe("Reviewed after snapshot");
+});
+
+it("cleans up cancelled review ownership across lifetime generations without applying a stale response", async () => {
+  await saveInspection(row); await renameInspection(id, "Retained draft");
+  const first = deferredReview<StoredInspection>();
+  const second = deferredReview<StoredInspection>();
+  const review = vi.fn().mockImplementationOnce(async () => first.promise).mockImplementationOnce(async () => second.promise);
+  const manager = createSyncManager({ locks: exclusiveReviewLocks(), online: () => true,
+    config: { base: "", reason: null }, review,
+    send: async () => { throw new VersionConflictFailure({ ...row, version: 4 }); },
+  }); managers.push(manager); manager.start();
+  for (let i = 0; i < 50 && !manager.getSnapshot().error; i++) await tick();
+  const oldWork = manager.reviewConflict();
+  expect(manager.getSnapshot().checking).toBe(true);
+  manager.stop(); manager.start();
+  expect(manager.getSnapshot().checking).toBe(false);
+  await manager.reviewConflict();
+  expect(review).toHaveBeenCalledTimes(1);
+  first.resolve({ ...row, title: "Wrong old generation", version: 98 }); await oldWork;
+  expect(manager.getSnapshot().error?.conflict?.current?.version).toBe(4);
+  const newWork = manager.reviewConflict();
+  expect(review).toHaveBeenCalledTimes(2);
+  expect(manager.getSnapshot().checking).toBe(true);
+  second.resolve({ ...row, title: "Current generation", version: 5 }); await newWork;
+  expect(manager.getSnapshot().checking).toBe(false);
+  expect(manager.getSnapshot().error?.conflict?.current?.title).toBe("Current generation");
+  manager.stop(); await manager.reviewConflict();
+  expect(review).toHaveBeenCalledTimes(2);
+  expect(manager.getSnapshot().checking).toBe(false);
+});

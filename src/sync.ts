@@ -1,7 +1,7 @@
-import { fetchSnapshot } from "./remoteApi";
-import { loadSyncQueue, removeQueueItem, subscribeQueueChanges, applyRemoteSnapshot, reserveRemoteCheck, finishRemoteCheck, REMOTE_INTERVAL } from "./db";
-import type { SyncQueueItem } from "./db";
-import { sendQueueItem, SyncFailure, AuthenticationFailure, RemoteDeletionFailure } from "./api";
+import { fetchReviewInspection, fetchSnapshot } from "./remoteApi";
+import { loadSyncQueue, removeQueueItem, subscribeQueueChanges, applyRemoteSnapshot, reserveRemoteCheck, finishRemoteCheck, REMOTE_INTERVAL, acknowledgeQueueItem, replaceReviewedUpdate } from "./db";
+import type { StoredInspection, SyncQueueItem } from "./db";
+import { sendQueueItem, SyncFailure, AuthenticationFailure, RemoteDeletionFailure, VersionConflictFailure, normalizeTitle } from "./api";
 import type { ApiConfig } from "./api";
 
 export const SYNC_LOCK = "fieldops-inspection-sync";
@@ -12,7 +12,7 @@ export type SyncState = {
   pendingCount: number;
   syncing: boolean;
   unavailable: string | null;
-  error: { message: string; permanent: boolean; itemId: string | null; authentication?: boolean; recoveryTitle?: string } | null;
+  error: { message: string; permanent: boolean; itemId: string | null; authentication?: boolean; recoveryTitle?: string; conflict?: { pending: StoredInspection; current?: StoredInspection } } | null;
 };
 // Dependencies make the coordinator testable without replacing its lock/abort lifecycle.
 type Options = {
@@ -20,6 +20,7 @@ type Options = {
   visible?: () => boolean;
   now?: () => number;
   snapshot?: typeof fetchSnapshot;
+  review?: typeof fetchReviewInspection;
   config: ApiConfig;
   requireCredential?: boolean;
   locks: Pick<LockManager, "request"> | undefined;
@@ -54,12 +55,20 @@ export function createSyncManager(options: Options) {
   const isCurrent = (owner: AbortSignal) => owner === lifetime.signal && !owner.aborted;
   let remoteActive: Promise<void> | null = null;
   let remoteController: AbortController | null = null;
+  let reviewController: AbortController | null = null;
+  let checkingOwner: AbortController | null = null;
+  const beginChecking = (controller: AbortController) => { checkingOwner = controller; publish({ checking: true }); };
+  const finishChecking = (controller: AbortController) => {
+    if (checkingOwner !== controller) return;
+    checkingOwner = null;
+    publish({ checking: false });
+  };
   let lastRemoteAttempt = -Infinity;
   function pull(): Promise<void> {
     const now = (options.now ?? Date.now)();
     if (lastRemoteAttempt > now) lastRemoteAttempt = -Infinity;
     if (!options.remote || lifetime.signal.aborted || configurationReason || state.error?.authentication || !options.online() ||
-        options.visible?.() === false || (options.requireCredential && !token) || active || remoteActive ||
+        options.visible?.() === false || (options.requireCredential && !token) || active || remoteActive || reviewController || state.checking ||
         now - lastRemoteAttempt < REMOTE_INTERVAL) return Promise.resolve();
     lastRemoteAttempt = now;
     const owner = lifetime.signal;
@@ -75,7 +84,7 @@ export function createSyncManager(options: Options) {
     const work = options.locks!.request(SYNC_LOCK, { mode: "exclusive", ifAvailable: true }, async (lock) => {
       if (!lock || !current()) return;
       if (!await reserveRemoteCheck(base, (options.now ?? Date.now)(), signal) || !current()) return;
-      publish({ checking: true });
+      beginChecking(controller);
       try {
         const snapshot = await (options.snapshot ?? fetchSnapshot)(base, signal, options.requireCredential ? () => token : undefined);
         if (!current()) return;
@@ -94,7 +103,8 @@ export function createSyncManager(options: Options) {
       owner.removeEventListener("abort", abort);
       if (remoteController === controller) {
         remoteController = null; remoteActive = null;
-        if (isCurrent(owner)) { publish({ checking: false }); void trigger(); }
+        finishChecking(controller);
+        if (isCurrent(owner)) void trigger();
       }
     });
     return remoteActive;
@@ -133,9 +143,10 @@ export function createSyncManager(options: Options) {
           item = (await load())[0];
           signal.throwIfAborted();
           if (!item) break;
-          await send(item, options.config.base!, signal, undefined, options.requireCredential ? () => token : undefined);
+          const version = await send(item, options.config.base!, signal, undefined, options.requireCredential ? () => token : undefined);
           signal.throwIfAborted();
-          await remove(item.id, signal);
+          if (typeof version === "number") await acknowledgeQueueItem(item, version, signal);
+          else await remove(item.id, signal);
           await refresh(owner);
         }
       } catch (error) {
@@ -150,6 +161,8 @@ export function createSyncManager(options: Options) {
           itemId: item?.id ?? null,
           authentication: failure instanceof AuthenticationFailure,
           recoveryTitle: error instanceof RemoteDeletionFailure ? item?.payload?.title : undefined,
+          conflict: error instanceof VersionConflictFailure && item?.payload
+            ? { pending: item.payload, current: error.current } : undefined,
         } });
       } finally {
         if (isCurrent(owner)) { publish({ syncing: false }); await refresh(owner); }
@@ -170,7 +183,64 @@ export function createSyncManager(options: Options) {
 
   return {
     pull,
-    pauseReads() { remoteController?.abort(); },
+    pauseReads() { remoteController?.abort(); reviewController?.abort(); },
+    async reviewConflict() {
+      const blocked = state.error;
+      if (lifetime.signal.aborted || !blocked?.conflict || !blocked.itemId || state.checking || remoteActive || remoteController || reviewController ||
+          state.syncing || state.unavailable || !options.online()) return;
+      const owner = lifetime.signal;
+      const generation = credentialVersion;
+      const controller = new AbortController();
+      reviewController = controller;
+      const abort = () => controller.abort();
+      owner.addEventListener("abort", abort, { once: true });
+      beginChecking(controller);
+      try {
+        await options.locks!.request(SYNC_LOCK, { mode: "exclusive", signal: controller.signal }, async () => {
+          const current = await (options.review ?? fetchReviewInspection)(blocked.conflict!.pending.id,
+            options.config.base!, controller.signal, options.requireCredential ? () => token : undefined);
+          controller.signal.throwIfAborted();
+          if (isCurrent(owner) && generation === credentialVersion && state.error?.itemId === blocked.itemId) {
+            publish({ error: { ...blocked, conflict: { pending: blocked.conflict!.pending, current } } });
+          }
+        });
+      } catch (error) {
+        if (!controller.signal.aborted && isCurrent(owner) && generation === credentialVersion && state.error?.itemId === blocked.itemId) {
+          if (error instanceof RemoteDeletionFailure) {
+            try {
+              await applyRemoteSnapshot({ inspections: [], deletedIds: [blocked.conflict!.pending.id] }, controller.signal);
+              if (isCurrent(owner) && generation === credentialVersion && !controller.signal.aborted) {
+                publish({ error: { ...blocked, message: error.message, conflict: { pending: blocked.conflict!.pending } } });
+              }
+            } catch { /* Retain the previous review and queued intent if persistence failed. */ }
+          } else publish({ error: { ...blocked, message: error instanceof SyncFailure ? error.message : "Could not review the server version. Draft kept." } });
+        }
+      } finally {
+        owner.removeEventListener("abort", abort);
+        if (reviewController === controller) { reviewController = null; finishChecking(controller); }
+      }
+    },
+    async saveReviewedChanges(title: string, status: StoredInspection["status"], reviewedVersion: number) {
+      const blocked = state.error;
+      const current = blocked?.conflict?.current;
+      const normalized = normalizeTitle(title);
+      if (!current || !blocked?.itemId || current.version !== reviewedVersion || !normalized ||
+          !["draft", "completed"].includes(status) || state.checking || state.syncing || state.unavailable) return;
+      const owner = lifetime.signal;
+      const generation = credentialVersion;
+      publish({ syncing: true });
+      try {
+        await options.locks!.request(SYNC_LOCK, { mode: "exclusive", signal: owner }, async () => {
+          owner.throwIfAborted();
+          if (generation !== credentialVersion || state.error?.itemId !== blocked.itemId) return;
+          await replaceReviewedUpdate(blocked.itemId!, current, normalized, status, owner);
+          if (isCurrent(owner) && generation === credentialVersion) publish({ error: null });
+        });
+      } catch {
+        if (isCurrent(owner)) publish({ error: { ...blocked, message: "Could not save reviewed changes. Your draft was kept." } });
+      } finally { if (isCurrent(owner)) publish({ syncing: false }); }
+      if (isCurrent(owner) && generation === credentialVersion) { await refresh(owner); await trigger(); }
+    },
     getSnapshot: () => state,
     async setCredential(value: string | null) {
       if (!options.requireCredential) return false;
@@ -178,6 +248,7 @@ export function createSyncManager(options: Options) {
       const version = ++credentialVersion;
       runController?.abort();
       remoteController?.abort();
+      reviewController?.abort();
       rerun = false;
       token = value;
       publish({ connected: value !== null, error: null, remoteError: null, unavailable: configurationReason ?? (value ? null : disconnected) });
@@ -203,8 +274,8 @@ export function createSyncManager(options: Options) {
       void refresh(signal).then(() => { if (isCurrent(signal)) void trigger(); });
     },
     // Keep active until the lock request settles: abort does not release a held Web Lock.
-    stop() { lifetime.abort(); remoteController?.abort(); unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, checking: false, remoteError: null, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
-    pause() { runController?.abort(); remoteController?.abort(); },
+    stop() { lifetime.abort(); remoteController?.abort(); reviewController?.abort(); checkingOwner = null; unsubscribe?.(); rerun = false; token = null; credentialVersion++; publish({ syncing: false, checking: false, remoteError: null, connected: false, unavailable: configurationReason ?? (options.requireCredential ? disconnected : null) }); },
+    pause() { runController?.abort(); remoteController?.abort(); reviewController?.abort(); },
     trigger,
     async retry() {
       const owner = lifetime.signal;

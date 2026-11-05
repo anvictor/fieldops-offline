@@ -10,10 +10,10 @@ const id = "00000000-0000-4000-8000-000000000001";
 const inspection: StoredInspection = { id, title: "Pump", status: "draft" };
 const item = (operation: SyncQueueItem["operation"] = "CREATE"): SyncQueueItem => ({
   id: crypto.randomUUID(), entityId: id, entityType: "inspection", operation,
-  payload: operation === "DELETE" ? null : { ...inspection }, createdAt: "2026-01-01T00:00:00Z",
+  payload: operation === "DELETE" ? null : { ...inspection }, expectation: operation === "UPDATE" ? { version: 1 } : undefined, createdAt: "2026-01-01T00:00:00Z",
 });
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } });
-const ack = (status = 201) => json({ ...inspection, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" }, status);
+const ack = (status = 201) => json({ ...inspection, version: 1, createdAt: "2026-01-01T00:00:00Z", updatedAt: "2026-01-01T00:00:00Z" }, status);
 const missing = () => json({ error: { code: "INSPECTION_NOT_FOUND", message: "Inspection not found." } }, 404);
 const signal = () => new AbortController().signal;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -132,7 +132,7 @@ describe("durable IndexedDB queue", () => {
 
 describe("HTTP delivery and acknowledgment", () => {
   it.each([200, 201])("accepts CREATE acknowledgment %s", async (status) => {
-    await expect(sendQueueItem(item(), "", signal(), vi.fn().mockResolvedValue(ack(status)))).resolves.toBeUndefined();
+    await expect(sendQueueItem(item(), "", signal(), vi.fn().mockResolvedValue(ack(status)))).resolves.toBe(1);
   });
   it("replays CREATE after a lost response with the same ID and immutable body", async () => {
     vi.useFakeTimers();const f = vi.fn().mockRejectedValueOnce(new TypeError("lost response")).mockResolvedValueOnce(ack(200));

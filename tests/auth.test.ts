@@ -5,9 +5,9 @@ import type { SyncQueueItem } from "../src/db";
 
 const token = "synthetic_owner_token_".padEnd(43, "x");
 const id = "00000000-0000-4000-8000-000000000016";
-const item: SyncQueueItem = { id: "queue-16", entityId: id, entityType: "inspection", operation: "CREATE",
+const item: SyncQueueItem = { id: "00000000-0000-4000-8000-000000000116", entityId: id, entityType: "inspection", operation: "CREATE",
   payload: { id, title: "Auth fixture", status: "draft" }, createdAt: "2026-01-01T00:00:00Z" };
-const response = () => new Response(JSON.stringify({ ...item.payload, createdAt: item.createdAt, updatedAt: item.createdAt }),
+const response = () => new Response(JSON.stringify({ ...item.payload, version: 1, createdAt: item.createdAt, updatedAt: item.createdAt }),
   { status: 201, headers: { "Content-Type": "application/json" } });
 afterEach(() => { vi.useRealTimers(); });
 

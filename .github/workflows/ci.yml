@@ -103,5 +103,6 @@ jobs:
             smoke-results/auth-browser-report.json
             smoke-results/owner-connection.png
             smoke-results/device-deletion-draft.png
+            smoke-results/occ-conflict-review.png
           retention-days: 7
           if-no-files-found: warn

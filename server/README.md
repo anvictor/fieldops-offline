@@ -1,6 +1,6 @@
 # FieldOps API
 
-A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA can replay its IndexedDB mutation queue through the local Vite proxy. Production supports a private single-owner bearer token. An authenticated bounded snapshot supports activity-driven download and explicit deletion awareness; per-user accounts and general concurrent-edit conflict resolution are not implemented.
+A separate Node.js/TypeScript Express REST API backed by PostgreSQL. The React PWA can replay its IndexedDB mutation queue through the local Vite proxy. Production supports a private single-owner bearer token. An authenticated bounded snapshot supports activity-driven download and explicit deletion awareness; title/status writes use optimistic concurrency and explicit human review; per-user accounts and automatic content merges are not implemented.
 
 ## Local setup
 
@@ -37,20 +37,20 @@ Root scripts delegate to `server/`, so its `.env` resolves consistently. For a c
 
 ## REST contract
 
-All responses are JSON except successful deletion. Inspection objects have UUID `id` (server-generated when omitted on create), trimmed `title` (1–200 Unicode characters, no null character), `status` (`draft` or `completed`), and UTC ISO `createdAt` / `updatedAt` timestamps.
+All responses are JSON except successful deletion. Inspection objects have UUID `id` (server-generated when omitted on create), trimmed `title` (1–200 Unicode characters, no null character), `status` (`draft` or `completed`), and UTC ISO `createdAt` / `updatedAt` timestamps, and a positive integer `version`.
 
 - `GET /api/health`: 200 `{ "status": "ok", "service": "fieldops-api" }`. Process liveness only, not database readiness.
 - `GET /api/inspections`: 200 array ordered by creation time then ID.
 - `GET /api/inspections/:id`: 200 inspection; 404 if missing.
 - `POST /api/inspections`: JSON `{ "title": "Inspect pump", "status": "draft" }`; status defaults to draft. Returns 201 and a `Location` header.
-- `PATCH /api/inspections/:id`: at least one of title/status; returns 200. Omitted values, ID, and creation time are preserved.
+- `PATCH /api/inspections/:id`: at least one of title/status plus positive integer `expectedVersion` and UUID `mutationId`; returns 200 with incremented version. Omitted values, ID, and creation time are preserved.
 - `DELETE /api/inspections/:id`: 204 with no body; 404 if missing.
 
-POST also accepts an optional client UUID `id`. A new ID returns 201; replay of the same ID and normalized title/status returns the existing row with 200. Omitted status defaults to draft before comparison. Different content at that ID returns 409 `ID_CONFLICT`; concurrent same-ID requests use PostgreSQL uniqueness safely. PATCH still accepts only title/status.
+POST also accepts an optional client UUID `id`. A new ID returns 201; replay of the same ID and normalized title/status returns the existing row with 200. Omitted status defaults to draft before comparison. Different content at that ID returns 409 `ID_CONFLICT`; concurrent same-ID requests use PostgreSQL uniqueness safely. PATCH additionally requires expectedVersion and mutationId; an unversioned request fails closed400 VERSION_REQUIRED.
 
 Missing inspection GET/PATCH/DELETE returns 404 JSON `INSPECTION_NOT_FOUND`; unknown routes retain `NOT_FOUND`. The client treats only a verified inspection-specific missing response as successful repeated DELETE; missing PATCH remains blocked.
 
-Only title/status (and optional create id) are writable. Unknown fields, invalid UUIDs, and invalid values return 400. Writes require `Content-Type: application/json` (415 otherwise); the body limit is 16 KiB (413). Errors use `{ "error": { "code": "INVALID_INPUT", "message": "..." } }`; unexpected errors return a generic 500 without stack traces or database details. SQL values are parameterized.
+Only title/status are editable inspection fields; optional create id, mutationId and PATCH expectedVersion are protocol metadata. Unknown fields, invalid UUIDs, and invalid values return 400. Writes require `Content-Type: application/json` (415 otherwise); the body limit is 16 KiB (413). Errors use `{ "error": { "code": "INVALID_INPUT", "message": "..." } }`; unexpected errors return a generic 500 without stack traces or database details. SQL values are parameterized.
 
 ```sh
 curl http://127.0.0.1:3001/api/health
@@ -168,6 +168,35 @@ secrets. Stop and remove only those disposable containers afterward.
 
 `GET /api/inspections/snapshot` returns `{ inspections, deletedIds }` from a single SQL/MVCC statement. It is authenticated like CRUD and uses no-store. Active rows and retired UUIDs each have a5000-entry limit (query5001, reject whole response413 `SNAPSHOT_TOO_LARGE`); no truncation/pagination is implied.
 
-Migration002 adds permanent inspection_tombstones. Authenticated valid DELETE retires a UUID transactionally even if its row is already missing; the response stays204/inspection-specific404. POST/DELETE serialize through an advisory transaction lock keyed by UUID, so a delayed CREATE cannot recreate a retired identity:409 `INSPECTION_DELETED`. PATCH remains non-upserting404. Applied migration001 is unchanged. No tombstone collection is implemented; deletions before002 cannot be reconstructed. Non-deletion concurrent edits retain existing last-successful-write behavior.
+Migration002 adds permanent inspection_tombstones. Authenticated valid DELETE retires a UUID transactionally even if its row is already missing; the response stays204/inspection-specific404. POST/DELETE serialize through an advisory transaction lock keyed by UUID, so a delayed CREATE cannot recreate a retired identity:409 `INSPECTION_DELETED`. PATCH remains non-upserting404. Applied migration001 is unchanged. No tombstone collection is implemented; deletions before002 cannot be reconstructed. Title/status concurrent edits use the optimistic-concurrency protocol below; DELETE remains unconditional.
 
-Deploy backend/migration first via the existing release command, verify health/snapshot auth without exposing the owner token, then deploy frontend. Old clients keep their CRUD contracts and cannot recreate newly retired IDs. Do not manually mutate production inspection data for verification.
+Deploy backend/migration first via the existing release command, verify health/snapshot auth without exposing the owner token, then deploy frontend. Old clients cannot recreate newly retired IDs; after003 their unversioned PATCH fails closed until updated. Do not manually mutate production inspection data for verification.
+
+
+## Versioned optimistic concurrency
+
+Migration003 initializes existing inspections at version1 and adds permanent
+inspection_mutations receipts. All list/detail/snapshot and CREATE/PATCH rows carry
+version. PATCH requires an integer expectedVersion in1…2147483646 and UUID
+mutationId. UPDATE predicates by id and expectedVersion and increments exactly
+once. A stale request returns409 VERSION_CONFLICT with `{ error, current }`, where
+current is the authoritative inspection; no fields change. Valid-version missing
+PATCH stays404 INSPECTION_NOT_FOUND. Invalid/missing version or mutation identity
+fails closed400 VERSION_REQUIRED; malformed fields remain400 INVALID_INPUT.
+
+New clients POST a client id and mutationId. CREATE and PATCH serialize identity
+and mutation UUIDs transactionally, binding a receipt to operation, inspection id
+and normalized request (including expectedVersion and omitted-field presence).
+Identical successful replay returns the original response/version/status before
+checking current state, even after another edit or deletion. Mutation identity
+reuse with different content/identity/operation returns409 MUTATION_CONFLICT.
+Legacy POST without mutationId retains normalized matching200 replay. A new
+versioned CREATE cannot adopt an existing row with version greater than1 as its
+original ACK. Failed/conflicting requests create no receipt. Permanent receipts
+and tombstones have no garbage collection; no exactly-once transport is claimed.
+
+Deploy003/backend before the frontend. Existing old clients may safely block on
+PATCH until they update; never re-enable unfenced old-backend PATCH after rollout.
+DELETE remains unconditional and retires an identity even after a concurrent edit.
+Use disposable local database/browser contexts for write verification; do not run
+synthetic tests against hosted production inspections.

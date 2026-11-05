@@ -1,5 +1,6 @@
-import { AuthenticationFailure, normalizeTitle, REQUEST_TIMEOUT, SyncFailure } from "./api";
+import { AuthenticationFailure, normalizeTitle, REQUEST_TIMEOUT, RemoteDeletionFailure, SyncFailure } from "./api";
 import type { StoredInspection } from "./db";
+import { parseServerInspection } from "./inspectionVersion";
 
 export type RemoteSnapshot = { inspections: StoredInspection[]; deletedIds: string[] };
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -17,8 +18,10 @@ export function parseSnapshot(value: unknown): RemoteSnapshot {
         normalizeTitle(row.title) !== row.title || (row.status !== "draft" && row.status !== "completed") ||
         typeof row.createdAt !== "string" || !Number.isFinite(Date.parse(row.createdAt)) ||
         typeof row.updatedAt !== "string" || !Number.isFinite(Date.parse(row.updatedAt))) throw invalid();
+    const inspection = parseServerInspection(row);
+    if (!inspection) throw invalid();
     seen.add(row.id);
-    return { id: row.id, title: row.title, status: row.status as StoredInspection["status"] };
+    return inspection;
   });
   const deletedIds = data.deletedIds.map((id: unknown) => {
     if (typeof id !== "string" || !uuid.test(id) || seen.has(id)) throw invalid();
@@ -69,5 +72,53 @@ export async function fetchSnapshot(base: string, signal: AbortSignal, credentia
     signal.throwIfAborted();
     if (error instanceof SyncFailure) throw error;
     throw new SyncFailure("Could not check server changes. Local data was kept; try later activity.", false);
+  } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
+}
+
+
+// Explicit review only: shares the sync lock at the caller, never polls or alters pending intent.
+export async function fetchReviewInspection(id: string, base: string, signal: AbortSignal,
+  credential?: () => string | null, fetcher: typeof fetch = fetch): Promise<StoredInspection> {
+  const token = credential?.();
+  if (credential && (!token || !base.startsWith("https://"))) throw new AuthenticationFailure("Connect to review the server version.");
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal.throwIfAborted();
+  signal.addEventListener("abort", abort, { once: true });
+  const timer = setTimeout(abort, REQUEST_TIMEOUT);
+  try {
+    const response = await fetcher(`${base}/api/inspections/${encodeURIComponent(id)}`, {
+      signal: controller.signal, cache: "no-store", redirect: "error",
+      headers: { Accept: "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    });
+    if (response.status === 401 || response.status === 403) throw new AuthenticationFailure("Connect to review the server version.");
+    if (!/^application\/json(;|$)/i.test(response.headers.get("content-type") ?? "")) throw invalid();
+    const reader = response.body?.getReader();
+    if (!reader || Number(response.headers.get("content-length")) > 16384) throw invalid();
+    const chunks: Uint8Array[] = [];
+    let length = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.length;
+        if (length > 16384) { await reader.cancel(); throw invalid(); }
+        chunks.push(value);
+      }
+    } finally { reader.releaseLock(); }
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
+    const data = JSON.parse(new TextDecoder().decode(bytes));
+    if (response.status === 404 && data?.error?.code === "INSPECTION_NOT_FOUND" && typeof data.error.message === "string") throw new RemoteDeletionFailure();
+    if (!response.ok) throw invalid();
+    const current = parseServerInspection(data);
+    signal.throwIfAborted();
+    if (controller.signal.aborted || !current || current.id !== id) throw invalid();
+    return current;
+  } catch (error) {
+    signal.throwIfAborted();
+    if (error instanceof SyncFailure) throw error;
+    throw new SyncFailure("Could not review the server version. Your draft was kept.", false);
   } finally { clearTimeout(timer); signal.removeEventListener("abort", abort); }
 }

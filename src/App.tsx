@@ -1,3 +1,4 @@
+import { ConflictReview } from "./ConflictReview";
 import { PwaUpdateBanner } from "./PwaUpdateBanner";
 import { useUpdateBlocker } from "./hooks/useUpdateBlocker";
 import { withUpdateWork } from "./updateSafety";
@@ -15,10 +16,13 @@ import { useEffect, useId, useState, useSyncExternalStore } from "react";
 import { useOnlineStatus } from "./hooks/useOnlineStatus";
 import {
   deleteInspectionWithSync,
+  loadEditSource,
   InspectionUnavailableError,
   InspectionConflictError,
   saveInspectionWithSync,
 } from "./db";
+
+import type { EditSource } from "./db";
 
 type InspectionStatus = "draft" | "completed";
 
@@ -35,7 +39,8 @@ type InspectionCardProps = {
   status: InspectionStatus;
   onToggleStatus: () => void;
   onDelete: () => void;
-  onRename: (title: string, expectedTitle: string) => Promise<void>;
+  beginEdit: () => Promise<EditSource>;
+  onRename: (title: string, expectedTitle: string, source?: EditSource) => Promise<void>;
 };
 
 function InspectionCard({
@@ -46,11 +51,13 @@ function InspectionCard({
   onToggleStatus,
   onDelete,
   onRename,
+  beginEdit,
 }: InspectionCardProps) {
   const inputId = useId();
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [originalTitle, setOriginalTitle] = useState(title);
+  const [editSource, setEditSource] = useState<EditSource>();
   const [missing, setMissing] = useState(false);
   const unavailable = deleted || missing;
   const [saving, setSaving] = useState(false);
@@ -64,7 +71,7 @@ function InspectionCard({
     setSaving(true);
     setError("");
     try {
-      await onRename(draftTitle, originalTitle);
+      await onRename(draftTitle, originalTitle, editSource);
       setEditing(false);
       onEditing(false);
     } catch (error) {
@@ -94,7 +101,14 @@ function InspectionCard({
         {!validTitle && <p role="alert">Title must contain 1–200 Unicode characters and no null character.</p>}
         <div aria-live="polite">{saving && <p>Saving title…</p>}</div>
         {unavailable ? <p role="alert">This inspection was deleted in another tab or device. Copy your draft before dismissing it.</p> : error && <p role="alert">{error}</p>}
-      </form> : <button onClick={() => { setDraftTitle(title); setOriginalTitle(title); setError(""); setEditing(true); onEditing(true); }}>Edit title</button>}
+      </form> : <button disabled={saving} onClick={() => {
+        setSaving(true);
+        void beginEdit().then(source => {
+          if (!source.inspection) throw new Error("Inspection unavailable.");
+          setEditSource(source); setDraftTitle(source.inspection.title); setOriginalTitle(source.inspection.title);
+          setError(""); setEditing(true); onEditing(true);
+        }).catch(() => setError("Could not open the title editor. Please try again.")).finally(() => setSaving(false));
+      }}>Edit title</button>}
       <button disabled={saving || unavailable} onClick={onToggleStatus}>
         {status === "draft" ? "Complete inspection" : "Reopen inspection"}
       </button>
@@ -178,9 +192,9 @@ function App() {
     }
   }
 
-  async function changeInspectionTitle(id: string, title: string, expectedTitle: string) {
+  async function changeInspectionTitle(id: string, title: string, expectedTitle: string, source?: EditSource) {
     try {
-      const result = await withUpdateWork(() => renameInspection(id, title, expectedTitle));
+      const result = await withUpdateWork(() => renameInspection(id, title, expectedTitle, source));
       if (result.changed && navigator.onLine) void sync.retry();
     } finally { await refresh(); }
   }
@@ -283,7 +297,8 @@ function App() {
                   <InspectionCard deleted={deleted} onEditing={(editing) => edit(inspection.id, editing)} title={inspection.title} status={inspection.status}
                     onToggleStatus={() => toggleInspectionStatus(inspection.id)}
                     onDelete={() => deleteInspection(inspection.id)}
-                    onRename={(title, expectedTitle) => changeInspectionTitle(inspection.id, title, expectedTitle)} />
+                    beginEdit={() => loadEditSource(inspection.id)}
+                    onRename={(title, expectedTitle, source) => changeInspectionTitle(inspection.id, title, expectedTitle, source)} />
                 </section>
               ))}
             </div>
@@ -302,6 +317,10 @@ function App() {
               {syncState.error && <p role="alert">Synchronization error: {syncState.error.message}</p>}
               {syncState.error?.recoveryTitle && <p>Pending title to copy: {syncState.error.recoveryTitle}</p>}
             </div>
+            {syncState.error?.conflict && syncState.error.itemId && <ConflictReview key={syncState.error.itemId}
+              itemId={syncState.error.itemId} pending={syncState.error.conflict.pending} current={syncState.error.conflict.current}
+              busy={syncState.syncing || syncState.checking || !isOnline || !!syncState.unavailable}
+              review={() => sync.reviewConflict()} save={(title, status, version) => sync.saveReviewedChanges(title, status, version)} />}
             <div className="sync-actions">
               <button disabled={!isOnline || syncState.syncing || !!syncState.unavailable}
                 onClick={() => void sync.retry()}>Retry synchronization</button>

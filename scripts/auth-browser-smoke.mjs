@@ -1,4 +1,5 @@
 import { checkDevices } from "./device-browser-smoke.mjs";
+import { checkConcurrentEdits } from "./occ-browser-smoke.mjs";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
@@ -122,6 +123,8 @@ try {
   checks.push("browser deletion, anonymous 401 and forbidden-origin 403");
   phase = "two-device activity and deletion";
   checks.push(...await checkDevices({ browser, origin, apiOrigin, api, token, pool }));
+  phase = "two-device optimistic concurrency";
+  checks.push(...await checkConcurrentEdits({ browser, origin, apiOrigin, api, token, pool }));
   phase = "secret-free evidence";
   await page.getByRole("button", { name: "Disconnect", exact: true }).click();
   await mkdir("smoke-results", { recursive: true });

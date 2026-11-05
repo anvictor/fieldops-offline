@@ -8,7 +8,7 @@ import { subscribeActivity } from "../src/activity";
 
 const id = "00000000-0000-4000-8000-000000000021";
 const row = { id, title: "Shared", status: "draft" as const };
-const remote = { ...row, createdAt: "2026-10-22T00:00:00.000Z", updatedAt: "2026-10-22T00:00:00.000Z" };
+const remote = { ...row, version: 1, createdAt: "2026-10-22T00:00:00.000Z", updatedAt: "2026-10-22T00:00:00.000Z" };
 const empty = { inspections: [], deletedIds: [] };
 const signal = () => new AbortController().signal;
 const managers: ReturnType<typeof createSyncManager>[] = [];
@@ -35,7 +35,7 @@ beforeEach(() => { vi.stubGlobal("indexedDB", new IDBFactory()); vi.stubGlobal("
 afterEach(() => { managers.splice(0).forEach(manager => manager.stop()); vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 it("validates snapshots completely before returning local fields", async () => {
-  expect(parseSnapshot({ inspections: [remote], deletedIds: [] })).toEqual({ inspections: [row], deletedIds: [] });
+  expect(parseSnapshot({ inspections: [remote], deletedIds: [] })).toEqual({ inspections: [{ ...row, version: 1 }], deletedIds: [] });
   for (const data of [[], null, {}, { inspections: [], deletedIds: ["invalid"] },
     { inspections: [remote, remote], deletedIds: [] }, { inspections: [remote], deletedIds: [id] },
     { inspections: [{ ...remote, title: " " }], deletedIds: [] },
@@ -46,7 +46,7 @@ it("validates snapshots completely before returning local fields", async () => {
     await expect(fetchSnapshot("", signal(), undefined, vi.fn(async () => result))).rejects.toThrow();
   }
   const fetcher = vi.fn(async () => response({ inspections: [remote], deletedIds: [] }));
-  expect(await fetchSnapshot("", signal(), undefined, fetcher)).toEqual({ inspections: [row], deletedIds: [] });
+  expect(await fetchSnapshot("", signal(), undefined, fetcher)).toEqual({ inspections: [{ ...row, version: 1 }], deletedIds: [] });
   expect(fetcher).toHaveBeenCalledTimes(1);
 });
 

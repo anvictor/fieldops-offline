@@ -70,7 +70,7 @@ CDN cache behavior, and apply remaining Blueprint settings in Dashboard if neede
 Enter the API's private owner token in the PWA password field and press Connect.
 This sends the existing queued operations to that configured API. Anyone holding
 the token can access the same server inspection data: do not distribute it as a
-recruiter credential. There are no separate accounts, general concurrent-edit conflict resolution or exactly-once delivery. Connected devices may receive activity-driven snapshots and explicit server deletions.
+recruiter credential. There are no separate accounts, automatic content merges or exactly-once delivery. Title/status edits use optimistic concurrency and explicit human conflict review. Connected devices may receive activity-driven snapshots and explicit server deletions.
 
 The token lives only in the tab's memory; no durable browser store, queue, export,
 URL or log contains it. Reloading and Disconnect clear it. Offline local CRUD
@@ -126,3 +126,18 @@ TASK-016 was reconciled to done by [PR #37](https://github.com/anvictor/fieldops
 ### TASK021 rollout order
 
 Deploy API/migration002 first using the existing release.sh migration step. The additive tombstone table protects retired UUIDs from late CREATE replay; existing clients keep CRUD response compatibility. Verify backend liveness and anonymous snapshot401 without fetching secrets or changing production inspections. Then deploy the frontend snapshot/activity client and verify its exact build marker/anonymous offline behavior. Authenticated two-device mutation proof belongs to disposable PostgreSQL/browser fixtures; live same-owner device verification is user-operated. No metadata-only frontend deploy or credential rotation is required.
+
+
+## TASK022 version protocol rollout
+
+Release migration003 and the versioned backend before deploying the frontend.
+The existing release script applies migrations before listening. Old clients'
+unversioned PATCH requests must fail closed400 VERSION_REQUIRED during the
+transition; POST/DELETE retain their existing legacy behavior. Verify the exact
+backend commit and successful migration/release before the exact frontend Pages
+release. A rollback must retain version fencing and durable receipts; do not serve
+an old unfenced backend to the new client. Direct hosted verification uses health,
+release metadata and existing authorized read-only endpoints, never synthetic
+production inspection writes. Disposable local PostgreSQL/browser tests establish
+the write/race/replay contract. Preserve review/CI/exact-SHA rollout evidence in
+the implementation PR before registry completion.

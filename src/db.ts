@@ -3,7 +3,9 @@ const DB_VERSION = 2;
 const QUEUE_CHANNEL = "fieldops-queue-changed";
 const listeners = new Set<() => void>();
 
-export type StoredInspection = { id: string; title: string; status: "draft" | "completed" };
+export type StoredInspection = { id: string; title: string; status: "draft" | "completed"; version?: number };
+export type VersionExpectation = { version: number } | { operationId: string };
+export type EditSource = { expectation?: VersionExpectation; inspection?: StoredInspection };
 export type SyncQueueItem = {
   id: string;
   entityType: "inspection";
@@ -12,6 +14,8 @@ export type SyncQueueItem = {
   payload: StoredInspection | null;
   createdAt: string;
   sequence?: number;
+  orderId?: string;
+  expectation?: VersionExpectation;
 };
 
 export function openFieldOpsDB(): Promise<IDBDatabase> {
@@ -129,18 +133,20 @@ export function deleteInspectionWithSync(id: string): Promise<void> {
   return mutateWithSync(id, "DELETE", null);
 }
 
+export function compareQueueItems(a: SyncQueueItem, b: SyncQueueItem): number {
+  const compare = (x: string, y: string) => x < y ? -1 : x > y ? 1 : 0;
+  if (a.sequence === undefined && b.sequence !== undefined) return -1;
+  if (a.sequence !== undefined && b.sequence === undefined) return 1;
+  if (a.sequence !== undefined && b.sequence !== undefined) return a.sequence - b.sequence;
+  return compare(a.createdAt, b.createdAt) || compare(a.orderId ?? a.id, b.orderId ?? b.id);
+}
+
 export async function loadSyncQueue(): Promise<SyncQueueItem[]> {
   const items = await transaction<SyncQueueItem[]>(["syncQueue"], "readonly", (tx, result) => {
     const request = tx.objectStore("syncQueue").getAll();
     request.onsuccess = () => result(request.result);
   });
-  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-  return items.sort((a, b) => {
-    if (a.sequence === undefined && b.sequence !== undefined) return -1;
-    if (a.sequence !== undefined && b.sequence === undefined) return 1;
-    if (a.sequence !== undefined && b.sequence !== undefined) return a.sequence - b.sequence;
-    return compare(a.createdAt, b.createdAt) || compare(a.id, b.id);
-  });
+  return items.sort(compareQueueItems);
 }
 
 // Must be called inside the sync Web Lock. Re-read before deleting; never touch inspections.
@@ -219,11 +225,11 @@ export class InspectionUnavailableError extends Error {
   constructor() { super("This inspection was deleted in another tab or device. Copy your draft before dismissing it."); }
 }
 export class InspectionConflictError extends Error {
-  constructor() { super("The title changed in another tab. Copy your draft, then cancel and reopen the editor to use the latest title."); }
+  constructor() { super("The title or inspection status changed in another tab or device. Copy your draft, then cancel and reopen the editor to review the latest value."); }
 }
 
 // Read, validate and patch current fields inside the same serialized write transaction.
-export async function updateInspectionWithSync(id: string, update: (current: StoredInspection) => StoredInspection, enqueueUnchanged = false) {
+export async function updateInspectionWithSync(id: string, update: (current: StoredInspection) => StoredInspection, enqueueUnchanged = false, expectedSource?: EditSource) {
   let failure: unknown;
   let result: { inspection: StoredInspection; changed: boolean };
   try {
@@ -248,10 +254,28 @@ export async function updateInspectionWithSync(id: string, update: (current: Sto
               try {
                 const sequence = next.result ?? 1;
                 if (!Number.isSafeInteger(sequence) || sequence < 1 || sequence >= Number.MAX_SAFE_INTEGER) throw new Error("Invalid queue sequence.");
-                store.put(inspection);
-                tx.objectStore("syncQueue").add({ id: crypto.randomUUID(), entityType: "inspection", entityId: id,
-                  operation: "UPDATE", payload: structuredClone(inspection), createdAt: new Date().toISOString(), sequence });
-                metadata.put(sequence + 1, "nextSequence");
+                const acknowledged = metadata.get(`inspectionVersion:${id}`);
+                const openedPredecessor = expectedSource?.expectation && "operationId" in expectedSource.expectation
+                  ? metadata.get(`mutationAck:${expectedSource.expectation.operationId}`) : undefined;
+                const pending = tx.objectStore("syncQueue").getAll();
+                pending.onsuccess = () => {
+                  try {
+                    const predecessors = (pending.result as SyncQueueItem[]).filter(item => item.entityId === id && item.operation !== "DELETE");
+                    predecessors.sort(compareQueueItems);
+                    const predecessor = predecessors.at(-1);
+                    const version = Math.max(before.version ?? 0, acknowledged.result ?? 0);
+                    const expectation = predecessor ? { operationId: predecessor.id } : version > 0 ? { version } : undefined;
+                    const sameCausalAcknowledgment = expectation && "version" in expectation &&
+                      openedPredecessor?.result?.entityId === id && openedPredecessor.result.version === expectation.version;
+                    if (expectedSource && JSON.stringify(expectedSource.expectation) !== JSON.stringify(expectation) && !sameCausalAcknowledgment) {
+                      failure = new InspectionConflictError(); tx.abort(); return;
+                    }
+                    store.put(inspection);
+                    tx.objectStore("syncQueue").add({ id: crypto.randomUUID(), entityType: "inspection", entityId: id,
+                      operation: "UPDATE", payload: structuredClone(inspection), expectation, createdAt: new Date().toISOString(), sequence });
+                    metadata.put(sequence + 1, "nextSequence");
+                  } catch (error) { failure = error; tx.abort(); }
+                };
               } catch (error) { failure = error; tx.abort(); }
             };
           } catch (error) { failure = error; tx.abort(); }
@@ -310,5 +334,92 @@ export async function applyRemoteSnapshot(snapshot: { inspections: StoredInspect
 export function finishRemoteCheck(base: string, now: number): Promise<void> {
   return transaction(["syncMetadata"], "readwrite", (tx) => {
     tx.objectStore("syncMetadata").put(now, `remoteCheck:${base}`);
+  });
+}
+
+
+// Called only while holding SYNC_LOCK. ACK metadata and dequeue commit together.
+export async function acknowledgeQueueItem(item: SyncQueueItem, version: number, signal: AbortSignal) {
+  if (!Number.isSafeInteger(version) || version < 1) throw new Error("Invalid acknowledgment version.");
+  await transaction<void>(["syncQueue", "syncMetadata"], "readwrite", (tx) => {
+    const queue = tx.objectStore("syncQueue");
+    const current = queue.get(item.id);
+    current.onsuccess = () => {
+      if (!current.result) return;
+      const metadata = tx.objectStore("syncMetadata");
+      metadata.put({ entityId: item.entityId, version }, `mutationAck:${item.id}`);
+      const previous = metadata.get(`inspectionVersion:${item.entityId}`);
+      previous.onsuccess = () => metadata.put(Math.max(previous.result ?? 0, version), `inspectionVersion:${item.entityId}`);
+      queue.delete(item.id);
+    };
+  }, signal);
+  notifyQueueChanged();
+}
+
+export function resolveExpectedVersion(item: SyncQueueItem, signal: AbortSignal): Promise<number | undefined> {
+  const expectation = item.expectation;
+  if (!expectation || typeof expectation !== "object" || Array.isArray(expectation)) return Promise.resolve(undefined);
+  if ("version" in expectation) return Promise.resolve(expectation.version);
+  if (!expectation || !("operationId" in expectation)) return Promise.resolve(undefined);
+  return transaction(["syncMetadata"], "readonly", (tx, done) => {
+    const request = tx.objectStore("syncMetadata").get(`mutationAck:${expectation.operationId}`);
+    request.onsuccess = () => done(request.result?.entityId === item.entityId ? request.result.version : undefined);
+  }, signal);
+}
+
+// Explicit human resolution replaces only the reviewed item; descendants keep their identities/expectations.
+export async function replaceReviewedUpdate(itemId: string, current: StoredInspection, title: string,
+  status: StoredInspection["status"], signal: AbortSignal) {
+  if (!Number.isSafeInteger(current.version) || current.version! < 1) throw new Error("Review a server version first.");
+  await transaction<void>(["syncQueue", "inspections", "syncMetadata"], "readwrite", (tx) => {
+    const queue = tx.objectStore("syncQueue");
+    const selected = queue.get(itemId);
+    selected.onsuccess = () => {
+      const item = selected.result as SyncQueueItem | undefined;
+      if (!item || item.operation !== "UPDATE" || item.entityId !== current.id) { tx.abort(); return; }
+      const metadata = tx.objectStore("syncMetadata");
+      const retired = metadata.get("remoteDeletedIds");
+      retired.onsuccess = () => {
+        if ((retired.result ?? []).includes(current.id)) { tx.abort(); return; }
+        const payload = { id: current.id, title, status };
+        queue.delete(item.id);
+        queue.add({ ...item, id: crypto.randomUUID(), orderId: item.orderId ?? item.id, payload, expectation: { version: current.version } });
+        // Keep a later local edit untouched; update the row only if this was its latest pending edit.
+        const all = queue.getAll();
+        all.onsuccess = () => {
+          const later = (all.result as SyncQueueItem[]).some(entry => entry.entityId === current.id &&
+            entry.id !== item.id && compareQueueItems(entry, item) > 0);
+          if (!later) tx.objectStore("inspections").put(payload);
+        };
+        metadata.delete(`reviewDraft:${item.id}`);
+      };
+    };
+  }, signal);
+  notifyQueueChanged();
+}
+
+export function saveReviewDraft(itemId: string, value: { title: string; status: StoredInspection["status"] }) {
+  return transaction<void>(["syncMetadata"], "readwrite", tx => { tx.objectStore("syncMetadata").put(value, `reviewDraft:${itemId}`); });
+}
+export function loadReviewDraft(itemId: string): Promise<{ title: string; status: StoredInspection["status"] } | undefined> {
+  return transaction(["syncMetadata"], "readonly", (tx, done) => {
+    const request = tx.objectStore("syncMetadata").get(`reviewDraft:${itemId}`);
+    request.onsuccess = () => done(request.result);
+  });
+}
+
+
+// Capture the causal source when opening an editor, including same-title/ABA changes.
+export function loadEditSource(id: string): Promise<EditSource> {
+  return transaction(["inspections", "syncQueue", "syncMetadata"], "readonly", (tx, done) => {
+    const current = tx.objectStore("inspections").get(id);
+    const acknowledged = tx.objectStore("syncMetadata").get(`inspectionVersion:${id}`);
+    const pending = tx.objectStore("syncQueue").getAll();
+    pending.onsuccess = () => {
+      const predecessor = (pending.result as SyncQueueItem[]).filter(item => item.entityId === id && item.operation !== "DELETE").sort(compareQueueItems).at(-1);
+      if (!current.result) { tx.abort(); return; }
+      const version = Math.max(current.result.version ?? 0, acknowledged.result ?? 0);
+      done({ inspection: current.result, expectation: predecessor ? { operationId: predecessor.id } : version > 0 ? { version } : undefined });
+    };
   });
 }

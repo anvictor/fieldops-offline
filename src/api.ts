@@ -1,4 +1,6 @@
-import type { SyncQueueItem } from "./db";
+import { resolveExpectedVersion } from "./db";
+import type { StoredInspection, SyncQueueItem } from "./db";
+import { parseServerInspection, validVersion } from "./inspectionVersion";
 
 export type ApiConfig = { base: string | null; reason: string | null };
 export function resolveApiConfig(development: boolean, value?: string): ApiConfig {
@@ -28,6 +30,15 @@ export class RemoteDeletionFailure extends SyncFailure {
   constructor() { super("This inspection was deleted on the server. Pending changes are retained for review or discard.", true); }
 }
 
+export class VersionConflictFailure extends SyncFailure {
+  readonly current?: StoredInspection;
+  constructor(current?: StoredInspection) {
+    super(current ? "This inspection changed on another device. Review the server version before saving."
+      : "This pending change has no confirmed version or its predecessor was replaced. Review the server version before saving.", true);
+    this.current = current;
+  }
+}
+
 export class AuthenticationFailure extends SyncFailure {
   constructor(message: string) { super(message, true); }
 }
@@ -47,7 +58,7 @@ export function delay(ms: number, signal: AbortSignal): Promise<void> {
 }
 
 export async function sendQueueItem(item: SyncQueueItem, base: string, signal: AbortSignal,
-  fetcher: typeof fetch = fetch, credential?: () => string | null): Promise<void> {
+  fetcher: typeof fetch = fetch, credential?: () => string | null): Promise<number | void> {
   if (item.entityType !== "inspection" || !UUID.test(item.entityId) || !["CREATE", "UPDATE", "DELETE"].includes(item.operation)) {
     throw new SyncFailure("Invalid queued operation. Review or discard it to continue.", true);
   }
@@ -59,14 +70,17 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
       throw new SyncFailure("Invalid queued inspection. Review or discard it to continue.", true);
     }
   }
+  const expectedVersion = item.operation === "UPDATE" ? await resolveExpectedVersion(item, signal) : undefined;
+  if (item.operation === "UPDATE" && (!validVersion(expectedVersion) || expectedVersion >= 2147483647)) throw new VersionConflictFailure();
+  if (item.operation !== "DELETE" && !UUID.test(item.id)) throw new SyncFailure("Invalid mutation identity. Operation retained.", true);
   const url = `${base}/api/inspections${item.operation === "CREATE" ? "" : `/${encodeURIComponent(item.entityId)}`}`;
   const method = { CREATE: "POST", UPDATE: "PATCH", DELETE: "DELETE" }[item.operation];
   // Serialize once: all retries send the same queued snapshot, never the latest local row.
   const body = item.operation === "DELETE" ? undefined : JSON.stringify({
-    ...(item.operation === "CREATE" ? { id: item.entityId } : {}), title, status: payload!.status,
+    ...(item.operation === "CREATE" ? { id: item.entityId } : { expectedVersion }), mutationId: item.id, title, status: payload!.status,
   });
 
-  async function attempt() {
+  async function attempt(): Promise<number | void> {
     signal.throwIfAborted();
     const token = credential?.();
     if (credential && (!token || !base.startsWith("https://"))) {
@@ -84,7 +98,7 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
       }, REQUEST_TIMEOUT);
     });
     try {
-      await Promise.race([cancelled, (async () => {
+      const version = await Promise.race([cancelled, (async () => {
         const response = await fetcher(url, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, body,
           signal: controller.signal, redirect: "error" });
         if (response.status === 401 || response.status === 403) {
@@ -106,15 +120,25 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
         if (item.operation === "DELETE" && missing) return;
         if (item.operation === "UPDATE" && missing) throw new RemoteDeletionFailure();
         if (response.status === 409 && error?.code === "INSPECTION_DELETED") throw new RemoteDeletionFailure();
+        if (response.status === 409 && error?.code === "VERSION_CONFLICT") {
+          const current = parseServerInspection(data.current);
+          if (!current || current.id !== item.entityId.toLowerCase()) throw invalidAck();
+          throw new VersionConflictFailure(current);
+        }
+        if (error?.code === "VERSION_REQUIRED" && response.status === 400) throw new VersionConflictFailure();
         if (response.status === 409 && error?.code === "ID_CONFLICT") throw new SyncFailure("Inspection ID conflicts with server content. Operation blocked.", true);
         if (!response.ok) throw new SyncFailure("Server rejected the operation. Review or discard it to continue.", true);
         const expectedStatus = item.operation === "CREATE" ? [200, 201] : [200];
         if (item.operation === "DELETE" || !expectedStatus.includes(response.status) ||
             data.id !== item.entityId.toLowerCase() || data.title !== title || data.status !== payload!.status ||
             typeof data.createdAt !== "string" || !Number.isFinite(Date.parse(data.createdAt)) ||
-            typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))) throw invalidAck();
+            typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt)) ||
+            !parseServerInspection(data) || (item.operation === "UPDATE" && data.version !== expectedVersion! + 1) ||
+            (item.operation === "CREATE" && data.version !== 1)) throw invalidAck();
+        return data.version as number;
       })()]);
       signal.throwIfAborted();
+      return version;
     } catch (error) {
       signal.throwIfAborted();
       if (error instanceof SyncFailure) throw error;
@@ -125,7 +149,7 @@ export async function sendQueueItem(item: SyncQueueItem, base: string, signal: A
     }
   }
   for (let attemptNumber = 0; ; attemptNumber++) {
-    try { await attempt(); return; } catch (error) {
+    try { return await attempt(); } catch (error) {
       signal.throwIfAborted();
       if (!(error instanceof SyncFailure) || error.permanent || attemptNumber >= RETRY_DELAYS.length) throw error;
       await delay(RETRY_DELAYS[attemptNumber], signal);

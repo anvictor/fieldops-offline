@@ -7,7 +7,7 @@ import { securityMiddleware } from "./security.js";
 import { privateDemoRateLimit } from "./rate-limit.js";
 import { ApiError, inspectionId, inspectionInput } from "./validation.js";
 
-const columns = 'id, title, status, created_at AS "createdAt", updated_at AS "updatedAt"';
+const columns = 'id, title, status, created_at AS "createdAt", updated_at AS "updatedAt", version';
 const notFound = () => new ApiError(404, "INSPECTION_NOT_FOUND", "Inspection not found.");
 
 export function createApp(pool: Pool, security: ApiSecurity = { mode: "development" }) {
@@ -56,11 +56,33 @@ export function createApp(pool: Pool, security: ApiSecurity = { mode: "developme
     if (!result.rowCount) throw notFound();
     res.json(result.rows[0]);
   });
+  async function receipt(client: PoolClient, mutationId: string | undefined, id: string,
+    operation: "CREATE" | "UPDATE", request: Record<string, unknown>) {
+    if (!mutationId) return null;
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1)::bigint)", [`mutation:${mutationId}`]);
+    const existing = await client.query("SELECT * FROM inspection_mutations WHERE mutation_id = $1", [mutationId]);
+    const row = existing.rows[0];
+    if (row && (row.inspection_id !== id || row.operation !== operation ||
+        JSON.stringify(row.request, Object.keys(row.request).sort()) !== JSON.stringify(request, Object.keys(request).sort()))) {
+      throw new ApiError(409, "MUTATION_CONFLICT", "Mutation identity already belongs to a different request.");
+    }
+    return row ? { row: row.response, status: row.response_status as number } : null;
+  }
+  async function remember(client: PoolClient, mutationId: string | undefined, id: string,
+    operation: "CREATE" | "UPDATE", request: Record<string, unknown>, row: unknown, status: number) {
+    if (mutationId) await client.query(`INSERT INTO inspection_mutations
+      (mutation_id, inspection_id, operation, request, response, response_status) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [mutationId, id, operation, JSON.stringify(request), JSON.stringify(row), status]);
+  }
   app.post("/api/inspections", async (req, res) => {
     const input = inspectionInput(req.body, false, true);
+    if (input.mutationId && !input.id) throw new ApiError(400, "INVALID_INPUT", "Versioned CREATE requires a client id.");
     const id = input.id ?? randomUUID();
     const status = input.status ?? "draft";
+    const request = { title: input.title!, status };
     const result = await identityTransaction(id, async (client) => {
+      const prior = await receipt(client, input.mutationId, id, "CREATE", request);
+      if (prior) return prior;
       if ((await client.query("SELECT id FROM inspection_tombstones WHERE id = $1", [id])).rowCount) {
         throw new ApiError(409, "INSPECTION_DELETED", "This inspection identity was deleted.");
       }
@@ -68,28 +90,45 @@ export function createApp(pool: Pool, security: ApiSecurity = { mode: "developme
         `INSERT INTO inspections (id, title, status) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING RETURNING ${columns}`,
         [id, input.title, status],
       );
-      if (inserted.rowCount) return { row: inserted.rows[0], created: true };
+      if (inserted.rowCount) {
+        await remember(client, input.mutationId, id, "CREATE", request, inserted.rows[0], 201);
+        return { row: inserted.rows[0], status: 201 };
+      }
       const existing = await client.query(`SELECT ${columns} FROM inspections WHERE id = $1`, [id]);
       const row = existing.rows[0];
-      if (!row || row.title !== input.title || row.status !== status) {
-        throw new ApiError(409, "ID_CONFLICT", "Inspection ID already has different content.");
+      // New mutation identities cannot adopt a later version as an old CREATE ACK.
+      if (!row || row.title !== input.title || row.status !== status || (input.mutationId && row.version !== 1)) {
+        throw new ApiError(409, "ID_CONFLICT", "Inspection ID already has different content or history.");
       }
-      return { row, created: false };
+      await remember(client, input.mutationId, id, "CREATE", request, row, 200);
+      return { row, status: 200 };
     });
-    if (result.created) res.status(201).location(`/api/inspections/${id}`).json(result.row);
-    else res.status(200).json(result.row);
+    if (result.status === 201) res.location(`/api/inspections/${id}`);
+    res.status(result.status).json(result.row);
   });
 
   app.patch("/api/inspections/:id", async (req, res) => {
     const id = inspectionId(req.params.id);
     const input = inspectionInput(req.body, true);
-    const result = await pool.query(
-      `UPDATE inspections SET title = COALESCE($2, title), status = COALESCE($3, status),
-       updated_at = clock_timestamp() WHERE id = $1 RETURNING ${columns}`,
-      [id, input.title, input.status],
-    );
-    if (!result.rowCount) throw notFound();
-    res.json(result.rows[0]);
+    const request = { ...(input.title !== undefined ? { title: input.title } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}), expectedVersion: input.expectedVersion! };
+    const row = await identityTransaction(id, async (client) => {
+      const prior = await receipt(client, input.mutationId, id, "UPDATE", request);
+      if (prior) return prior.row;
+      const result = await client.query(
+        `UPDATE inspections SET title = COALESCE($2, title), status = COALESCE($3, status),
+         version = version + 1, updated_at = clock_timestamp() WHERE id = $1 AND version = $4 RETURNING ${columns}`,
+        [id, input.title, input.status, input.expectedVersion],
+      );
+      if (!result.rowCount) {
+        const current = await client.query(`SELECT ${columns} FROM inspections WHERE id = $1`, [id]);
+        if (!current.rowCount) throw notFound();
+        throw new ApiError(409, "VERSION_CONFLICT", "This inspection changed. Review the current server value.", current.rows[0]);
+      }
+      await remember(client, input.mutationId, id, "UPDATE", request, result.rows[0], 200);
+      return result.rows[0];
+    });
+    res.json(row);
   });
   app.delete("/api/inspections/:id", async (req, res) => {
     const id = inspectionId(req.params.id);
@@ -104,7 +143,7 @@ export function createApp(pool: Pool, security: ApiSecurity = { mode: "developme
 
   const errors: ErrorRequestHandler = (error: unknown, _req, res, _next) => {
     if (error instanceof ApiError) {
-      res.status(error.status).json({ error: { code: error.code, message: error.message } });
+      res.status(error.status).json({ error: { code: error.code, message: error.message }, ...(error.current ? { current: error.current } : {}) });
       return;
     }
     // Express's router marks malformed route-parameter decoding with this signature.

@@ -42,8 +42,15 @@ explainable; ESLint is configured, no dedicated formatter is configured.
   blocked queue item, not local data; discarding CREATE can block later changes.
 - Web Locks unavailable disables sync while offline CRUD continues. Close older
   tabs for blocked upgrades. Titles trim to 1–200 Unicode characters, no null.
-- One logical writer per inspection is assumed. No server fencing of stale
-  requests surviving context termination, exactly-once guarantee, general multi-device concurrent-edit conflict resolution is implemented. Activity-driven snapshots now download server state and explicit deletions; see the current README activity section.
+- Title/status writes use immutable expected versions or predecessor operation IDs,
+  resolved only through durable causal ACK metadata. ACK+dequeue is atomic and
+  never changes local fields. Conflicts keep queued intent and expose validated
+  server values for explicit review. Replacing/discarding an operation never aliases
+  its identity; its descendants stay blocked for their own review. Legacy pending
+  expectations are not backfilled. Capture editor sources when opening so same-title
+  status/ABA refreshes cannot silently advance the editor's base. DELETE remains
+  unconditional; delivery remains at least once. See README concurrent edits.
+
 
 ## Pages, PWA and API boundaries
 
@@ -64,4 +71,4 @@ trailing slashes normalize. It is public configuration, never a secret. A valid 
 Read [CONVENTIONS.md](../../CONVENTIONS.md) for deployment decisions and live checks.
 
 
-Activity-driven reads share the sync lock and a durable30second per-API reservation across tabs/reloads. Only eligible user pointer/key/scroll/focus/visible events or explicit Connect trigger a read, never an idle read timer or online-alone event. GET errors keep local data; responses are fully validated. Pending IDs shield active records; explicit retired IDs remove live rows but preserve queued payloads and editor recovery drafts. Apply rechecks abort/credential generation. Read-rate metadata contains no token and the completion stamp also prevents bursts after slow reads. Server tombstones prevent late CREATE resurrection; this does not add general edit version fencing. Upload retries and PWA checks are separate from snapshot-read throttling.
+Activity-driven reads share the sync lock and a durable30second per-API reservation across tabs/reloads. Only eligible user pointer/key/scroll/focus/visible events or explicit Connect trigger a read, never an idle read timer or online-alone event. GET errors keep local data; responses are fully validated. Pending IDs shield active records; explicit retired IDs remove live rows but preserve queued payloads and editor recovery drafts. Apply rechecks abort/credential generation. Read-rate metadata contains no token and the completion stamp also prevents bursts after slow reads. Server tombstones prevent late CREATE resurrection; title/status version fencing is provided separately by mutation replay. Explicit manual conflict-review detail reads share the sync lock but are separate from the30second activity snapshot budget. Upload retries and PWA checks are separate from snapshot-read throttling.

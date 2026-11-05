@@ -22,9 +22,9 @@ synthetic inspection titles. No recruiter needs the private owner token.
 is the historical backend evidence from TASK-016; each UI release records its own
 version and browser/deployment checks.
 
-v1 has one private owner principal, at-least-once queue delivery and one logical
-writer per inspection. Activity-driven server snapshots support download and remote deletion awareness; general
-concurrent edit conflict resolution remains outside this demo. JSON export backs up local inspections, not the queue or whole server
+v1 has one private owner principal and at-least-once queue delivery. Versioned
+optimistic concurrency protects title/status edits; conflicts need human review.
+Activity-driven snapshots support download and remote deletion awareness. JSON export backs up local inspections, not the queue or whole server
 database. Free hosting may sleep. These boundaries are part of the demonstration.
 
 ## Local development
@@ -51,7 +51,7 @@ Local CREATE/UPDATE/DELETE and the queued payload snapshot commit in one Indexed
 
 An exclusive same-origin Web Lock named `fieldops-inspection-sync` covers loading, sending, validating acknowledgment and committing removal. Overlapping triggers/tabs cannot process concurrently. BroadcastChannel only notifies queue changes; each receiver rereads IndexedDB instead of trusting a message count. All queue removals, including Discard, use the same lock. Upload acknowledgments never overwrite local inspection state. Validated activity snapshots update only records without pending local operations; explicit remote tombstones remove retired records while retaining queued payloads.
 
-Delivery is ordered and **at least once**, not exactly once. CREATE carries the local UUID; matching normalized server content returns 200 on replay, different content returns 409. DELETE can confirm an already missing inspection only through the API's JSON `INSPECTION_NOT_FOUND` response. PATCH missing is blocked. Server-side fencing is not implemented: Web Locks cannot fence a stale request that survives browser-context termination. Concurrent edits of non-deleted records retain last-successful-write semantics; activity snapshots provide server download and explicit deletion awareness, not a general conflict protocol.
+Delivery is ordered and **at least once**, not exactly once. CREATE carries the local UUID and stable mutation identity; receipt replay returns its original acknowledgment. Legacy CREATE without a mutation identity retains matching-content200 replay; conflicting identities/content return409. DELETE can confirm an already missing inspection only through the API's JSON `INSPECTION_NOT_FOUND` response. PATCH missing is blocked. Title/status PATCH uses an atomic expected-version check and durable mutation receipts, so stale writes cannot overwrite newer edits and successful retries do not apply twice. DELETE remains an explicit unconditional tombstone action. Delivery remains at least once; activity snapshots provide server download and explicit deletion awareness.
 
 Synchronization attempts occur on online startup, reconnect, online local mutation, and Retry. Requests time out after 8 seconds; network/timeout/5xx errors receive two retries after 500ms and 1000ms. A retained failure stops FIFO. Invalid legacy items remain visible as a blocked operation. Pending count, progress and safe errors appear in the UI. Discard requires confirmation, affects only the blocked queue item and leaves local data unchanged; discarding CREATE can leave later UPDATE/DELETE operations blocked.
 
@@ -188,4 +188,42 @@ Connect uploads existing pending operations and requests an authenticated initia
 
 The same private owner/API must be connected on both devices. Snapshot fields are validated before an atomic IndexedDB reconciliation under the sync lock. Pending local operations protect active rows from overwrite; no record is deleted merely because it is absent from a response. Explicit permanent server tombstones remove deleted live rows while keeping unsaved editor text and immutable blocked queue payloads available for copying/review or explicit discard. Retired IDs cannot be created again by delayed CREATE replay, and PATCH does not upsert. Deletions made before the tombstone migration have no reconstructible history; a verified missing PATCH still marks the local row unavailable.
 
-This is eventual convergence after the next eligible action, not live push. No automatic multi-user identity, versioned concurrent-edit merge or server fencing for general stale non-deletion writes is added. A snapshot is limited to5000 active and5000 retired IDs plus a2MiB client response cap; exceeding a limit rejects the whole read. Permanent tombstones have no garbage collection. Larger datasets need a separate paginated/delta protocol. Anonymous public demo/offline CRUD remain available without server reads.
+This is eventual convergence after the next eligible action, not live push. There is no per-user identity or automatic content merge. Title/status writes use the versioned conflict-review flow below. A snapshot is limited to5000 active and5000 retired IDs plus a2MiB client response cap; exceeding a limit rejects the whole read. Permanent tombstones have no garbage collection. Larger datasets need a separate paginated/delta protocol. Anonymous public demo/offline CRUD remain available without server reads.
+
+
+## Concurrent edits and review
+
+Every server inspection carries a positive `version`. Title/status edits send the
+version they were based on; the server atomically updates that exact version and
+increments it. A stale edit receives409 `VERSION_CONFLICT`, keeping the queued
+text/status locally. The synchronization panel shows the pending value and the
+current server value/version. **Review server version** explicitly rereads that
+inspection; it does not poll and is separate from the30second activity-snapshot
+budget. Change **Reviewed title/status**, then **Save reviewed changes** to submit
+against the version shown. Another intervening edit conflicts again. Pending
+intent and saved review drafts persist locally across reload. Wait for “Review draft
+saved on this device” before reloading; closing or forcing reload before the async
+write commits may lose an uncommitted keystroke. Active draft writes block PWA updates; unsaved card-editor text
+stays selectable while the page is open. Copy unsaved card text before reloading.
+
+Offline edits retain immutable causal references to earlier local operations.
+Durable ACK versions and dequeue commit together in existing IndexedDB v2 stores;
+ACKs never overwrite newer local fields. Successful CREATE/PATCH mutation receipts
+are permanent server records, allowing a lost-ACK retry to return its original
+result even after later edits/deletion. Normalized request/identity mismatches
+are rejected. Delivery is still at least once, not an exactly-once transport.
+
+Explicit review replaces only the blocked UPDATE. Following edits stay intact;
+if they depended on that abandoned operation they require their own review rather
+than being silently rebased. Retry alone changes no expectation. Discard keeps
+local fields and later queued operations. Existing pending edits with no known
+version remain blocked until reviewed; clean old rows can receive a source version
+through a validated snapshot. An editor opened before a same-title status/version
+change blocks Save and retains its text for copying/reopening. DELETE is still
+unconditional: it removes an inspection even if another inspector edited it.
+
+Roll out migration003/backend before this frontend. Older clients' unversioned
+PATCH requests fail safely with400 `VERSION_REQUIRED` until updated; old POST and
+DELETE remain available. Never roll back to an unfenced backend while versioned
+clients are live. Receipts and tombstones have no garbage collection; the bounded
+private demo needs a separate retention/scaling design for larger deployments.

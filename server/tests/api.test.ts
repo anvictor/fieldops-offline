@@ -2,6 +2,7 @@ import "dotenv/config";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import pg from "pg";
@@ -37,7 +38,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     await t.test("migration applies once and reruns without changing data", async () => {
       await migrate(pool);
       await migrate(pool);
-      assert.equal((await pool.query("SELECT * FROM schema_migrations")).rowCount, 2);
+      assert.equal((await pool.query("SELECT * FROM schema_migrations")).rowCount, 3);
     });
     await t.test("health and empty collection", async () => {
       const health = await request("/api/health");
@@ -51,7 +52,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
       const response = await request("/api/inspections", "POST", { title: "  O'Brien'); DROP TABLE inspections; --  " });
       assert.equal(response.status, 201);
       const inspection = await response.json();
-      assert.deepEqual(Object.keys(inspection).sort(), ["createdAt", "id", "status", "title", "updatedAt"]);
+      assert.deepEqual(Object.keys(inspection).sort(), ["createdAt", "id", "status", "title", "updatedAt", "version"]);
       id = inspection.id;
       createdAt = inspection.createdAt;
       assert.match(id, /^[0-9a-f-]{36}$/);
@@ -63,7 +64,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
       assert.equal((await pool.query("SELECT * FROM inspections")).rowCount, 1);
     });
     await t.test("partial updates preserve identity, creation time and omitted fields", async () => {
-      const response = await request(`/api/inspections/${id}`, "PATCH", { status: "completed" });
+      const response = await request(`/api/inspections/${id}`, "PATCH", { status: "completed", expectedVersion: 1, mutationId: randomUUID() });
       assert.equal(response.status, 200);
       const updated = await response.json();
       assert.equal(updated.id, id);
@@ -71,7 +72,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
       assert.equal(updated.status, "completed");
       assert.equal(updated.title, "O'Brien'); DROP TABLE inspections; --");
       assert.ok(Date.parse(updated.updatedAt) >= Date.parse(createdAt));
-      const renamed = await (await request(`/api/inspections/${id}`, "PATCH", { title: "Updated" })).json();
+      const renamed = await (await request(`/api/inspections/${id}`, "PATCH", { title: "Updated", expectedVersion: 2, mutationId: randomUUID() })).json();
       assert.equal(renamed.title, "Updated");
       assert.equal(renamed.status, "completed");
     });
@@ -142,7 +143,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
     await t.test("missing resources, unknown routes and deletion", async () => {
       const missing = randomUUID();
       await expectError(await request(`/api/inspections/${missing}`), 404, "INSPECTION_NOT_FOUND");
-      await expectError(await request(`/api/inspections/${missing}`, "PATCH", { title: "x" }), 404, "INSPECTION_NOT_FOUND");
+      await expectError(await request(`/api/inspections/${missing}`, "PATCH", { title: "x", expectedVersion: 1, mutationId: randomUUID() }), 404, "INSPECTION_NOT_FOUND");
       await expectError(await request(`/api/inspections/${missing}`, "DELETE"), 404, "INSPECTION_NOT_FOUND");
       await expectError(await request("/unknown"), 404, "NOT_FOUND");
       const deleted = await request(`/api/inspections/${id}`, "DELETE");
@@ -187,7 +188,7 @@ await test("PostgreSQL API: migrations, CRUD, persistence, validation, and safe 
       assert.equal((await request("/api/inspections", "POST", { id: retired, title: "Retired" })).status, 201);
       assert.equal((await request(`/api/inspections/${retired}`, "DELETE")).status, 204);
       await expectError(await request("/api/inspections", "POST", { id: retired, title: "Retired" }), 409, "INSPECTION_DELETED");
-      await expectError(await request(`/api/inspections/${retired}`, "PATCH", { title: "Late edit" }), 404, "INSPECTION_NOT_FOUND");
+      await expectError(await request(`/api/inspections/${retired}`, "PATCH", { title: "Late edit", expectedVersion: 1, mutationId: randomUUID() }), 404, "INSPECTION_NOT_FOUND");
       const snapshot = await request("/api/inspections/snapshot");
       assert.equal(snapshot.status, 200);
       const data = await snapshot.json();
@@ -251,7 +252,7 @@ await test("production owner authorization and CORS preserve PostgreSQL CRUD and
     assert.equal(first.headers.get("access-control-allow-origin"), origin);
     assert.equal((await request("/api/inspections", "POST", { id, title: "Private" })).status, 200);
     assert.equal((await request(`/api/inspections/${id}`)).status, 200);
-    assert.equal((await request(`/api/inspections/${id}`, "PATCH", { status: "completed" })).status, 200);
+    assert.equal((await request(`/api/inspections/${id}`, "PATCH", { status: "completed", expectedVersion: 1, mutationId: randomUUID() })).status, 200);
     assert.equal((await (await request(`/api/inspections/${id}`)).json()).status, "completed");
     assert.equal((await request(`/api/inspections/${id}`, "DELETE")).status, 204);
     const missing = await request(`/api/inspections/${id}`, "DELETE");
@@ -260,5 +261,109 @@ await test("production owner authorization and CORS preserve PostgreSQL CRUD and
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await pool.end();await admin.query(`DROP SCHEMA "${schema}" CASCADE`);await admin.end();
+  }
+});
+
+
+await test("optimistic concurrency and permanent mutation receipts", async (t) => {
+  const admin = new pg.Pool({ connectionString });
+  const schema = `occ_${randomUUID().replaceAll("-", "")}`;
+  await admin.query(`CREATE SCHEMA "${schema}"`);
+  const pool = new pg.Pool({ connectionString, options: `-c search_path=${schema}` });
+  // Recreate an actual002 installation before applying003 to existing rows.
+  await pool.query("CREATE TABLE schema_migrations (name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())");
+  for (const name of ["001_create_inspections.sql", "002_inspection_tombstones.sql"]) {
+    await pool.query(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+    await pool.query("INSERT INTO schema_migrations (name) VALUES ($1)", [name]);
+  }
+  const existingId = randomUUID();
+  await pool.query("INSERT INTO inspections (id,title,status) VALUES ($1,'Preserved','completed')", [existingId]);
+  const beforeMigration = (await pool.query("SELECT * FROM inspections WHERE id=$1", [existingId])).rows[0];
+  await migrate(pool); await migrate(pool);
+  const migrated = (await pool.query("SELECT * FROM inspections WHERE id=$1", [existingId])).rows[0];
+  assert.deepEqual(migrated, { ...beforeMigration, version: 1 });
+  const server = createApp(pool).listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const request = (id: string, method: string, body?: unknown) => fetch(`${base}/api/inspections${id ? `/${id}` : ""}`, {
+    method, headers: { "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  try {
+    await t.test("two inspectors at one version have exactly one winner; legacy PATCH fails closed", async () => {
+      const id = randomUUID();
+      await request("", "POST", { id, title: "Original" });
+      const writes = await Promise.all(["Inspector A", "Inspector B"].map(title =>
+        request(id, "PATCH", { title, expectedVersion: 1, mutationId: randomUUID() })));
+      assert.deepEqual(writes.map(row => row.status).sort(), [200, 409]);
+      const conflict = await writes.find(row => row.status === 409)!.json();
+      assert.equal(conflict.error.code, "VERSION_CONFLICT");
+      assert.equal(conflict.current.version, 2);
+      const current = await (await request(id, "GET")).json();
+      assert.equal(conflict.current.title, current.title);
+      const legacy = await request(id, "PATCH", { title: "Legacy overwrite" });
+      assert.equal(legacy.status, 400);
+      assert.equal((await legacy.json()).error.code, "VERSION_REQUIRED");
+      for (const expectedVersion of [null, 0, -1, 1.2, "2", 2147483647]) {
+        assert.equal((await request(id, "PATCH", { title: "Invalid", expectedVersion, mutationId: randomUUID() })).status, 400);
+      }
+      assert.deepEqual(await (await request(id, "GET")).json(), current);
+    });
+    await t.test("lost ACK replay returns original receipt after intervening edit and deletion", async () => {
+      const id = randomUUID();
+      const create = { id, title: "Initial", mutationId: randomUUID() };
+      const original = await (await request("", "POST", create)).json();
+      assert.equal(original.version, 1);
+      const edit = { title: "First", status: "completed", expectedVersion: 1, mutationId: randomUUID() };
+      const first = await (await request(id, "PATCH", edit)).json();
+      assert.equal(first.version, 2);
+      const second = await (await request(id, "PATCH", { title: "Later", expectedVersion: 2, mutationId: randomUUID() })).json();
+      assert.equal(second.version, 3);
+      assert.deepEqual(await (await request(id, "PATCH", { ...edit, title: "  First  " })).json(), first);
+      assert.deepEqual(await (await request("", "POST", { ...create, title: " Initial " })).json(), original);
+      assert.deepEqual(await (await request(id, "GET")).json(), second);
+      await request(id, "DELETE");
+      assert.deepEqual(await (await request(id, "PATCH", edit)).json(), first);
+      assert.deepEqual(await (await request("", "POST", create)).json(), original);
+      assert.equal((await request(id, "GET")).status, 404);
+      assert.equal((await pool.query("SELECT * FROM inspection_mutations WHERE inspection_id=$1", [id])).rowCount, 3);
+    });
+    await t.test("concurrent identical replay applies once and mutation identity cannot change request", async () => {
+      const id = randomUUID();
+      const createId = randomUUID();
+      const create = { id, title: "Start", mutationId: createId };
+      const created = await Promise.all([request("", "POST", create), request("", "POST", create)]);
+      assert.ok(created.every(row => row.status === 201));
+      const mutationId = randomUUID();
+      const edit = { status: "completed", expectedVersion: 1, mutationId };
+      const results = await Promise.all([request(id, "PATCH", edit), request(id, "PATCH", edit)]);
+      assert.ok(results.every(row => row.status === 200));
+      assert.deepEqual(await results[0].json(), await results[1].json());
+      assert.equal((await (await request(id, "GET")).json()).version, 2);
+      for (const changed of [{ ...edit, title: "Other" }, { ...edit, expectedVersion: 2 },
+        { ...edit, status: "draft" }, { title: "Start", mutationId: createId, expectedVersion: 1 }]) {
+        const response = await request(id, "PATCH", changed);
+        assert.equal(response.status, 409);
+        assert.equal((await response.json()).error.code, "MUTATION_CONFLICT");
+      }
+      const otherId = randomUUID();
+      await request("", "POST", { id: otherId, title: "Other" });
+      assert.equal((await request(otherId, "PATCH", edit)).status, 409);
+      assert.equal((await (await request(otherId, "GET")).json()).version, 1);
+      assert.equal((await pool.query("SELECT * FROM inspection_mutations WHERE mutation_id=$1", [mutationId])).rowCount, 1);
+    });
+    await t.test("same-content ABA advances version and stale partial edits cannot bypass it", async () => {
+      const id = randomUUID();
+      await request("", "POST", { id, title: "Same" });
+      await request(id, "PATCH", { status: "completed", expectedVersion: 1, mutationId: randomUUID() });
+      await request(id, "PATCH", { status: "draft", expectedVersion: 2, mutationId: randomUUID() });
+      const stale = await request(id, "PATCH", { title: "Stale", expectedVersion: 1, mutationId: randomUUID() });
+      assert.equal(stale.status, 409);
+      assert.equal((await stale.json()).current.version, 3);
+    });
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await pool.end();
+    await admin.query(`DROP SCHEMA "${schema}" CASCADE`);
+    await admin.end();
   }
 });

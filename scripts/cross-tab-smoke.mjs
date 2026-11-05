@@ -64,7 +64,7 @@ try {
   await card(b).getByRole("heading", { name: "Card: Remote title", exact: true }).waitFor();
   const conflictBefore = await snapshot(b);
   await card(b).getByRole("button", { name: "Save title", exact: true }).click();
-  await card(b).getByText(/The title changed in another tab/).waitFor();
+  await card(b).getByText(/The title or inspection status changed in another tab or device/).waitFor();
   assert.deepEqual(await snapshot(b), conflictBefore);
   await card(a).getByRole("button", { name: "Delete inspection", exact: true }).click();
   await card(b).getByText(/This inspection was deleted in another tab or device/).waitFor();
